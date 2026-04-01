@@ -1,0 +1,8 @@
+<parameter name="content">
+# Fix cargo check warning
+
+## Plan Implementation Steps:
+- [x] **Step 1:** Edit `src/main.rs` - Prefix unused `child_slot_new` with `_` (line 330)
+- [ ] **Step 2:** Verify with `cargo check`
+- [ ] **Step 3:** Complete task
+</parameter>
