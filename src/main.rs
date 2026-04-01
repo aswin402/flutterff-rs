@@ -17,7 +17,7 @@ use std::env;
 use std::time::Duration;
 use regex::Regex;
 
-const VERSION: &str = "1.3.0";
+const VERSION: &str = "1.5.0";
 const GREEN:  &str = "\x1b[92m";
 const YELLOW: &str = "\x1b[93m";
 const CYAN:   &str = "\x1b[96m";
@@ -74,17 +74,11 @@ fn check_online() -> bool {
 
 // ── flutter watcher ───────────────────────────────────────────────────────────
 
-fn run_flutter(
-    cmd: Vec<String>, 
-    port: u16, 
-    url_tx: mpsc::Sender<String>, 
-    child_slot: Arc<Mutex<Option<std::process::Child>>>,
-    stdin_slot: Arc<Mutex<Option<ChildStdin>>>
-) {
+fn run_flutter(cmd: Vec<String>, port: u16, url_tx: mpsc::Sender<String>, child_slot: Arc<Mutex<Option<std::process::Child>>>, stdin_slot: Arc<Mutex<Option<ChildStdin>>>) {
     let pattern = Regex::new(r"(http://(?:localhost|127\.0\.0\.1):\d+\S*)").unwrap();
     let mut sent = false;
 
-    let mut child = match Command::new(&cmd[0])
+    let child = match Command::new(&cmd[0])
         .args(&cmd[1..])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -100,26 +94,17 @@ fn run_flutter(
         }
     };
 
-    // store child and its stdin
-    let stdin = child.stdin.take().unwrap();
-    *stdin_slot.lock().unwrap() = Some(stdin);
+    // store child so window close handler can kill it
     *child_slot.lock().unwrap() = Some(child);
-    
     let slot_ref = child_slot.clone();
-    let stdin_ref = stdin_slot.clone();
 
-    // ── terminal input forwarding ─────────────────────────────────────────────
-    thread::spawn(move || {
-        let mut input = String::new();
-        let stdin_sys = std::io::stdin();
-        while stdin_sys.read_line(&mut input).is_ok() {
-            if let Some(mut child_stdin) = stdin_ref.lock().unwrap().as_ref() {
-                let _ = child_stdin.write_all(input.as_bytes());
-                let _ = child_stdin.flush();
-            }
-            input.clear();
+    // extract and store stdin for button use
+    {
+        let mut guard = slot_ref.lock().unwrap();
+        if let Some(ref mut c) = *guard {
+            *stdin_slot.lock().unwrap() = c.stdin.take();
         }
-    });
+    }
 
     let stdout = {
         let mut guard = slot_ref.lock().unwrap();
@@ -166,7 +151,6 @@ fn main() {
     let mut size_str               = "mobile".to_string();
     let mut list_sizes             = false;
     let mut show_ver               = false;
-    let mut wasm                   = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -179,11 +163,6 @@ fn main() {
             "--size" | "-s" => { i += 1; if i < args.len() { size_str = args[i].clone(); } }
             "--list-sizes"  => list_sizes = true,
             "--version"     => show_ver = true,
-            "--wasm"        => wasm = true,
-            "--renderer"    => { 
-                i += 1; 
-                println!("{}Note: --renderer is deprecated. Flutter 3.29+ manages renderers automatically.{}", YELLOW, RESET);
-            }
             _ => {}
         }
         i += 1;
@@ -242,8 +221,12 @@ fn main() {
     ];
     if profile  { flutter_cmd.push("--profile".to_string()); }
     if no_hot   { flutter_cmd.push("--no-hot".to_string()); }
-    if offline  { flutter_cmd.push("--no-pub".to_string()); }
-    if wasm     { flutter_cmd.push("--wasm".to_string()); }
+    if offline  {
+        flutter_cmd.push("--no-pub".to_string());
+        // Flutter 3.29+ removed HTML renderer — only CanvasKit remains
+        // --no-web-resources-cdn stops Flutter fetching CanvasKit from CDN
+        flutter_cmd.push("--no-web-resources-cdn".to_string());
+    }
     if let Some(f) = flavor { flutter_cmd.push("--flavor".to_string()); flutter_cmd.push(f); }
 
     // ── startup info ──────────────────────────────────────────────────────────
@@ -253,7 +236,6 @@ fn main() {
     println!("{}Port:{}       {}", YELLOW, RESET, port);
     println!("{}Mode:{}       {}", YELLOW, RESET, if profile { "profile" } else { "debug (web-server)" });
     println!("{}Hot reload:{} {}", YELLOW, RESET, if no_hot { "disabled" } else { "enabled — press r in terminal" });
-    if wasm { println!("{}Renderer:{}   wasm (SkWasm)", YELLOW, RESET); }
     println!("{}Network:{}    {}", YELLOW, RESET,
         if offline { "⚠ offline — using cached packages" } else { "✔ online" });
     println!("\n{}Starting Flutter...{}\n", YELLOW, RESET);
@@ -297,6 +279,22 @@ fn main() {
     size_btn.set_popup(Some(&menu));
     hb.pack_start(&size_btn);
 
+    // ── Hot Reload button (thunder icon = r) ────────────────────────────────
+    let stdin_slot: Arc<Mutex<Option<ChildStdin>>> = Arc::new(Mutex::new(None));
+
+    let reload_btn = gtk::Button::new();
+    let reload_img = gtk::Image::from_icon_name(Some("weather-storm-symbolic"), gtk::IconSize::Menu);
+    reload_btn.set_image(Some(&reload_img));
+    reload_btn.set_tooltip_text(Some("Hot Reload (r)"));
+    hb.pack_end(&reload_btn);
+
+    // ── Hot Restart button (refresh icon = R) ─────────────────────────────────
+    let restart_btn = gtk::Button::new();
+    let restart_img = gtk::Image::from_icon_name(Some("view-refresh-symbolic"), gtk::IconSize::Menu);
+    restart_btn.set_image(Some(&restart_img));
+    restart_btn.set_tooltip_text(Some("Hot Restart (R)"));
+    hb.pack_end(&restart_btn);
+
     // ── WebView ───────────────────────────────────────────────────────────────
     let ctx = WebContext::default().unwrap();
     ctx.set_cache_model(CacheModel::DocumentViewer);
@@ -305,59 +303,64 @@ fn main() {
     webview.load_uri("about:blank");
     webview.connect_context_menu(|_, _, _, _| true);
 
-    // ── Reload button ────────────────────────────────────────────────────────
-    let reload_btn = gtk::Button::new();
-    let reload_img = gtk::Image::from_icon_name(Some("view-refresh-symbolic"), gtk::IconSize::Menu);
-    reload_btn.set_image(Some(&reload_img));
-    reload_btn.set_tooltip_text(Some("Hot Reload (r)"));
-    
-    let (url_tx, url_rx) = mpsc::channel::<String>();
-    let child_slot: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
-    let stdin_slot: Arc<Mutex<Option<ChildStdin>>> = Arc::new(Mutex::new(None));
-
-    let reload_webview = webview.clone();
-    let reload_stdin = stdin_slot.clone();
-    reload_btn.connect_clicked(move |_| {
-        println!("{}Hot Reloading...{}", YELLOW, RESET);
-        if let Some(mut stdin) = reload_stdin.lock().unwrap().as_ref() {
-            let _ = stdin.write_all(b"r\n");
-            let _ = stdin.flush();
-        }
-        reload_webview.reload();
-    });
-    
-    // ── Hot restart button ────────────────────────────────────────────────────
-    let restart_btn = gtk::Button::new();
-    let restart_img = gtk::Image::from_icon_name(Some("system-run-symbolic"), gtk::IconSize::Menu);
-    restart_btn.set_image(Some(&restart_img));
-    restart_btn.set_tooltip_text(Some("Hot Restart (R)"));
-    
-    let restart_webview = webview.clone();
-    let restart_stdin = stdin_slot.clone();
-    restart_btn.connect_clicked(move |_| {
-        println!("{}Hot Restarting...{}", YELLOW, RESET);
-        if let Some(mut stdin) = restart_stdin.lock().unwrap().as_ref() {
-            let _ = stdin.write_all(b"R\n");
-            let _ = stdin.flush();
-        }
-        restart_webview.reload();
-    });
-    
-    // Pack buttons into header bar
-    hb.pack_start(&reload_btn);
-    hb.pack_start(&restart_btn);
-
     let vbox = GtkBox::new(gtk::Orientation::Vertical, 0);
     vbox.pack_start(&webview, true, true, 0);
     window.add(&vbox);
+
+    // wire reload button — sends 'r' to flutter stdin, reloads webview after delay
+    let reload_wv     = webview.clone();
+    let reload_stdin  = stdin_slot.clone();
+    let reload_pending = Arc::new(Mutex::new(None::<String>));
+    let reload_pending2 = reload_pending.clone();
+    reload_btn.connect_clicked(move |_| {
+        println!("{}Hot Reloading...{}", YELLOW, RESET);
+        if let Some(ref mut s) = *reload_stdin.lock().unwrap() {
+            let _ = s.write_all(b"r
+");
+            let _ = s.flush();
+        }
+        // reload webview after 800ms
+        let wv = reload_wv.clone();
+        let p  = reload_pending2.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(800), move || {
+            if let Some(url) = p.lock().unwrap().clone() {
+                wv.load_uri(&url);
+            }
+            glib::ControlFlow::Break
+        });
+    });
+
+    // wire restart button — sends 'R' to flutter stdin, reloads webview after delay
+    let restart_wv    = webview.clone();
+    let restart_stdin = stdin_slot.clone();
+    let restart_pending = reload_pending.clone();
+    restart_btn.connect_clicked(move |_| {
+        println!("{}Hot Restarting...{}", YELLOW, RESET);
+        if let Some(ref mut s) = *restart_stdin.lock().unwrap() {
+            let _ = s.write_all(b"R
+");
+            let _ = s.flush();
+        }
+        let wv = restart_wv.clone();
+        let p  = restart_pending.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(1500), move || {
+            if let Some(url) = p.lock().unwrap().clone() {
+                wv.load_uri(&url);
+            }
+            glib::ControlFlow::Break
+        });
+    });
+
     window.show_all();
 
+    // ── URL channel + child slot (must be declared before connect_destroy) ──────
+    let (url_tx, url_rx) = mpsc::channel::<String>();
+
+    let child_slot: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
     let child_slot_thread  = child_slot.clone();
     let child_slot_destroy = child_slot.clone();
-    let stdin_slot_thread  = stdin_slot.clone();
 
     window.connect_destroy(move |_| {
-        // kill flutter child so the port is freed immediately
         if let Some(mut child) = child_slot_destroy.lock().unwrap().take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -367,16 +370,53 @@ fn main() {
         gtk::main_quit();
     });
 
+    let stdin_slot_thread = stdin_slot.clone();
     thread::spawn(move || run_flutter(flutter_cmd, port, url_tx, child_slot_thread, stdin_slot_thread));
 
     let wv = webview.clone();
+    // shared state for retry logic
+    let pending_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let pending_clone = pending_url.clone();
+
+    // also share URL with button reload logic
+    let reload_pending_rx = reload_pending.clone();
+
+    // receive URL from flutter thread
     glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
         if let Ok(url) = url_rx.try_recv() {
-            wv.load_uri(&url);
+            *pending_clone.lock().unwrap() = Some(url.clone());
+            *reload_pending_rx.lock().unwrap() = Some(url);
+        }
+        glib::ControlFlow::Continue
+    });
+
+    // retry probe: wait until Flutter's server actually responds before loading
+    let wv2 = wv.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
+        let mut guard = pending_url.lock().unwrap();
+        if let Some(url) = guard.clone() {
+            // probe the port
+            let port_num: u16 = url
+                .split(':')
+                .nth(2)
+                .and_then(|s| s.split('/').next())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(8080);
+            if TcpStream::connect_timeout(
+                &format!("127.0.0.1:{}", port_num).parse().unwrap(),
+                Duration::from_millis(200),
+            ).is_ok() {
+                println!("{}✔ Flutter server ready — loading{}", GREEN, RESET);
+                wv2.load_uri(&url);
+                *guard = None; // clear so we don't reload again
+            } else {
+                println!("{}Waiting for Flutter server...{}", YELLOW, RESET);
+            }
         }
         glib::ControlFlow::Continue
     });
 
     // ── Run ───────────────────────────────────────────────────────────────────
     gtk::main();
+
 }
