@@ -1,13 +1,12 @@
-<div align="center">
-  <img src="asset/logo.png" alt="flutterff-rs logo" width="120">
-  <h1>flutterff-rs</h1>
-  <p><strong>A lightweight, ultra-fast Flutter Web development launcher for Linux.</strong></p>
-  <p>Native mobile window experience using GTK + WebKit2. No Chrome, no topbar, less RAM.</p>
+# ![flutterff-rs logo](asset/logo.png) flutterff-rs
 
-  [![Version](https://img.shields.io/badge/version-1.5.0-cyan.svg)](#)
-  [![Platform](https://img.shields.io/badge/platform-linux-lightgrey.svg)](#)
-  [![License](https://img.shields.io/badge/license-MIT-green.svg)](#)
-</div>
+**A lightweight, ultra-fast Flutter Web development launcher for Linux.**
+
+Native mobile window experience using GTK + WebKit2. No Chrome, no topbar, less RAM.
+
+[![Version](https://img.shields.io/badge/version-1.5.0-cyan.svg)](#)
+[![Platform](https://img.shields.io/badge/platform-linux-lightgrey.svg)](#)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](#)
 
 ---
 
@@ -21,19 +20,18 @@ It mimics a real mobile device, providing quick access to common screen sizes an
 
 - **🛡️ Minimal RAM footprint**: Uses WebKit2GTK directly, avoiding the overhead of a full browser.
 - **📱 Device Presets**: Instantly switch between common mobile, tablet, and desktop sizes.
-- **⚡ Integrated Hot Reload**: dedicated buttons for Hot Reload ('r') and Hot Restart ('R') that communicate directly with the Flutter process.
+- **⚡ Integrated Hot Reload**: dedicated lightning bolt button for Hot Reload ('r') and refresh button for Hot Restart ('R') that communicate directly with the Flutter process.
 - **✈️ Offline Mode**: Auto-detects offline status and configures Flutter to use cached packages and local resources.
 - **🎨 Custom Sizes**: Pass any resolution (e.g., `--size 430x932`) for precise testing.
 - **🏗️ Zero Configuration**: Automatically finds free ports and hooks into your existing Flutter environment.
 
 ## 📸 Screenshots
 
-<div align="center">
-  <img src="screenshots/image.png" alt="Main Window" width="400">
-  <p><em>Main application window with Flutter Web content.</em></p>
-  <img src="screenshots/resizemenu.png" alt="Resize Menu" width="400">
-  <p><em>Quickly switch between device presets via the header bar.</em></p>
-</div>
+![Main Window](screenshots/image.png)
+*Main application window with Flutter Web content.*
+
+![Resize Menu](screenshots/resizemenu.png)
+*Quickly switch between device presets via the header bar.*
 
 ---
 
@@ -120,6 +118,4 @@ flutterff-rs --port 9000 --offline
 
 ---
 
-<div align="center">
-  <p>Built with 🦀 Rust & 💙 Flutter</p>
-</div>
+Built with 🦀 Rust & 💙 Flutter

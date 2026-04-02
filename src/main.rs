@@ -279,11 +279,11 @@ fn main() {
     size_btn.set_popup(Some(&menu));
     hb.pack_start(&size_btn);
 
-    // ── Hot Reload button (thunder icon = r) ────────────────────────────────
+    // ── Hot Reload button (lightning icon = r) ────────────────────────────────
     let stdin_slot: Arc<Mutex<Option<ChildStdin>>> = Arc::new(Mutex::new(None));
 
     let reload_btn = gtk::Button::new();
-    let reload_img = gtk::Image::from_icon_name(Some("weather-storm-symbolic"), gtk::IconSize::Menu);
+    let reload_img = gtk::Image::from_icon_name(Some("weather-lightning-symbolic"), gtk::IconSize::Menu);
     reload_btn.set_image(Some(&reload_img));
     reload_btn.set_tooltip_text(Some("Hot Reload (r)"));
     hb.pack_end(&reload_btn);
