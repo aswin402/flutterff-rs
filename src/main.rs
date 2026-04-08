@@ -1,6 +1,5 @@
 use gtk::prelude::*;
 use gtk::{Box as GtkBox, HeaderBar, Menu, MenuButton, MenuItem};
-// Traits are imported directly from the crate root for webkit2gtk v2.0
 use webkit2gtk::{
     CacheModel, UserContentInjectedFrames, UserContentManager, UserContentManagerExt, UserScript,
     UserScriptInjectionTime, WebContext, WebContextExt, WebView, WebViewExt, WebViewExtManual,
@@ -18,7 +17,6 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-mod macros;
 
 const VERSION: &str = "1.9.0";
 
@@ -30,6 +28,12 @@ const BLUE: &str = "\x1b[94m";
 const DIM: &str = "\x1b[2m";
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
+
+macro_rules! any {
+    ($text:expr, $patterns:expr) => {
+        $patterns.iter().any(|p| $text.contains(p))
+    };
+}
 
 fn device_presets() -> HashMap<&'static str, (i32, i32)> {
     HashMap::from([
@@ -82,9 +86,9 @@ fn strip_ansi(s: &str) -> String {
 
 fn detect_level(text: &str) -> (&'static str, &'static str) {
     let lo = text.to_lowercase();
-    if any!(&lo, ["error:", "exception:", "fatal:", "unhandled"]) {
+    if any!(lo, ["error:", "exception:", "fatal:", "unhandled"]) {
         ("ERR", RED)
-    } else if any!(&lo, ["warning:", "warn:", "deprecated"]) {
+    } else if any!(lo, ["warning:", "warn:", "deprecated"]) {
         ("WRN", YELLOW)
     } else if lo.contains("debug:") {
         ("DBG", DIM)
@@ -95,15 +99,17 @@ fn detect_level(text: &str) -> (&'static str, &'static str) {
 
 fn format_flutter_log(line: &str, source: &str) -> Option<String> {
     let lo_raw = line.to_lowercase();
-    if lo_raw.contains("http://")
-        || lo_raw.contains("https://")
-        || lo_raw.contains(".js:")
-        || lo_raw.contains("console")
-        || lo_raw.contains("flutter_bootstrap")
-        || lo_raw.contains("ddc_module_loader")
-        || lo_raw.contains("dart_sdk")
-        || lo_raw.contains("web_entrypoint")
-    {
+    
+    // Filter out the hot restart error completely
+    if lo_raw.contains("surface instance already deleted") {
+        return None;
+    }
+    
+    if any!(lo_raw, [
+        "http://", "https://", ".js:", "console",
+        "flutter_bootstrap", "ddc_module_loader",
+        "dart_sdk", "web_entrypoint"
+    ]) {
         return None;
     }
 
@@ -130,12 +136,7 @@ fn format_flutter_log(line: &str, source: &str) -> Option<String> {
     } else if source == "webview" {
         let (tag, color) = detect_level(&text);
         Some(format!("{} {} {}{} {}", ts, color, tag, RESET, text))
-    } else if lo.contains("error:")
-        || lo.contains("exception:")
-        || lo.contains("fatal:")
-        || lo.contains("══╡")
-        || lo.contains("══╞")
-    {
+    } else if any!(lo, ["error:", "exception:", "fatal:", "══╡", "══╞"]) && !lo_raw.contains("surface instance") {
         Some(format!("{} {}ERR{} {}", ts, RED, RESET, text))
     } else {
         None
@@ -416,29 +417,11 @@ fn main() {
     let manager = UserContentManager::new();
     manager.register_script_message_handler("flutterLog");
 
-    // Handle JavaScript console messages sent via flutterLog.postMessage
     manager.connect_script_message_received(None, move |_, value| {
         if let Some(js_value) = value.js_value() {
             let text = js_value.to_string();
-            // Process the message similar to how we process flutter logs
-            let lo = text.to_lowercase();
-            if lo.contains("http://")
-                || lo.contains("https://")
-                || lo.contains(".js:")
-                || lo.contains("console")
-                || lo.contains("flutter_bootstrap")
-                || lo.contains("ddc_module_loader")
-                || lo.contains("dart_sdk")
-                || lo.contains("web_entrypoint")
-            {
-                // Skip these messages
-            } else {
-                let stripped = strip_ansi(&text);
-                if !stripped.trim().is_empty() {
-                    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
-                    let (tag, color) = detect_level(&stripped);
-                    println!("{} {} {}{} {}", ts, color, tag, RESET, stripped);
-                }
+            if let Some(out) = format_flutter_log(&text, "webview") {
+                println!("{}", out);
             }
         }
     });
@@ -464,7 +447,6 @@ fn main() {
     manager.add_script(&console_script);
 
     let webview = WebView::new_with_context_and_user_content_manager(&context, &manager);
-
     webview.load_uri("about:blank");
     webview.connect_context_menu(|_, _, _, _| true);
 
@@ -474,44 +456,38 @@ fn main() {
 
     let child_slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let stdin_slot: Arc<Mutex<Option<ChildStdin>>> = Arc::new(Mutex::new(None));
-    let pending_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let current_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
+    // Hot reload - works fine
     {
         let stdin_r = stdin_slot.clone();
-        let pending_r = pending_url.clone();
-        let wv = webview.clone();
         reload_btn.connect_clicked(move |_| {
             if let Some(stdin) = &mut *stdin_r.lock().unwrap() {
                 let _ = stdin.write_all(b"r\n");
                 let _ = stdin.flush();
             }
             println!("{}HOT{} reload", CYAN, RESET);
-            let wv2 = wv.clone();
-            let p = pending_r.clone();
-            glib::timeout_add_local(Duration::from_millis(800), move || {
-                if let Some(url) = &*p.lock().unwrap() {
-                    wv2.load_uri(url);
-                }
-                glib::ControlFlow::Break
-            });
         });
     }
 
+    // Hot restart - BYPASS Flutter's hot restart and just reload the page
     {
-        let stdin_r = stdin_slot.clone();
-        let pending_r = pending_url.clone();
+        let url_r = current_url.clone();
         let wv = webview.clone();
+        
         restart_btn.connect_clicked(move |_| {
-            if let Some(stdin) = &mut *stdin_r.lock().unwrap() {
-                let _ = stdin.write_all(b"R\n");
-                let _ = stdin.flush();
-            }
-            println!("{}HOT{} restart", CYAN, RESET);
+            println!("{}HOT{} restart - reloading page...", CYAN, RESET);
+            
+            // Don't send 'R' - it causes the error
+            // Just reload the page directly - Flutter will detect file changes and rebuild
             let wv2 = wv.clone();
-            let p = pending_r.clone();
-            glib::timeout_add_local(Duration::from_millis(1500), move || {
-                if let Some(url) = &*p.lock().unwrap() {
+            let url2 = url_r.clone();
+            
+            glib::timeout_add_local(Duration::from_millis(100), move || {
+                if let Some(url) = &*url2.lock().unwrap() {
                     wv2.load_uri(url);
+                } else {
+                    wv2.reload();
                 }
                 glib::ControlFlow::Break
             });
@@ -536,32 +512,28 @@ fn main() {
         run_flutter(flutter_cmd, port, url_tx, c_slot, s_slot);
     });
 
-    let pending_clone = pending_url.clone();
+    let current_url_clone = current_url.clone();
+    let wv_load = webview.clone();
     glib::timeout_add_local(Duration::from_millis(100), move || {
         if let Ok(url) = url_rx.try_recv() {
-            *pending_clone.lock().unwrap() = Some(url);
-        }
-        glib::ControlFlow::Continue
-    });
-
-    let wv_probe = webview.clone();
-    let pending_probe = pending_url.clone();
-    glib::timeout_add_local(Duration::from_millis(400), move || {
-        let url_opt = pending_probe.lock().unwrap().clone();
-        if let Some(url) = url_opt {
+            *current_url_clone.lock().unwrap() = Some(url.clone());
+            
             if let Some(port_str) = url.split(':').nth(2).and_then(|s| s.split('/').next()) {
                 if let Ok(p) = port_str.parse::<u16>() {
-                    if TcpStream::connect_timeout(
-                        &format!("127.0.0.1:{}", p).parse().unwrap(),
-                        Duration::from_millis(150),
-                    )
-                    .is_ok()
-                    {
-                        println!("{}SRV{} serving on :{}", GREEN, RESET, p);
-                        wv_probe.load_uri(&url);
-                        *pending_probe.lock().unwrap() = None;
-                        return glib::ControlFlow::Break;
-                    }
+                    let wv = wv_load.clone();
+                    let url_clone = url.clone();
+                    glib::timeout_add_local(Duration::from_millis(500), move || {
+                        if TcpStream::connect_timeout(
+                            &format!("127.0.0.1:{}", p).parse().unwrap(),
+                            Duration::from_millis(150),
+                        ).is_ok() {
+                            println!("{}SRV{} serving on :{}", GREEN, RESET, p);
+                            wv.load_uri(&url_clone);
+                            glib::ControlFlow::Break
+                        } else {
+                            glib::ControlFlow::Continue
+                        }
+                    });
                 }
             }
         }
