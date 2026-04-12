@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-const VERSION: &str = "1.9.0";
+const VERSION: &str = "2.0.0";
 
 const GREEN: &str = "\x1b[92m";
 const YELLOW: &str = "\x1b[93m";
@@ -340,7 +340,7 @@ fn main() {
         "custom"
     };
     println!(
-        "\n{}flutterff-rs{} {}{}v{}{}",
+        "\n 🦊{}flutterff-rs{} {}{}v{}{}",
         BOLD, RESET, DIM, CYAN, VERSION, RESET
     );
     println!("{}──────────────────────────────{}", DIM, RESET);
@@ -366,13 +366,13 @@ fn main() {
     gtk::init().expect("Failed to initialize GTK");
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_title("flutterff");
+    window.set_title("🦊flutterff");
     window.set_default_size(width, height);
     window.set_resizable(true);
 
     let hb = HeaderBar::new();
     hb.set_show_close_button(true);
-    hb.set_title(Some("flutterff"));
+    hb.set_title(Some("🦊flutterff"));
     hb.set_decoration_layout(Some("menu:close"));
     window.set_titlebar(Some(&hb));
 
@@ -399,7 +399,7 @@ fn main() {
     size_btn.set_popup(Some(&menu));
     hb.pack_start(&size_btn);
 
-    let reload_btn = gtk::Button::with_label("⚡");
+    let reload_btn = gtk::Button::with_label("🗲");
     reload_btn.set_tooltip_text(Some("Hot Reload (r)"));
     hb.pack_end(&reload_btn);
 
