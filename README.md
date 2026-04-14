@@ -1,4 +1,6 @@
-<img src="assets/logo.png" width="200" alt="Zed File Drop Logo">
+# Flutterff-rs
+
+<img src="asset/logo.png" width="200" alt="Zed File Drop Logo">
 **A lightweight, ultra-fast Flutter Web development launcher for Linux.**
 
 Native mobile window experience using GTK + WebKit2. No Chrome, no topbar, less RAM.
