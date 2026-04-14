@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-const VERSION: &str = "2.0.0";
+const VERSION: &str = "2.4.0";
 
 const GREEN: &str = "\x1b[92m";
 const YELLOW: &str = "\x1b[93m";
@@ -221,6 +221,41 @@ fn run_flutter(
     });
 }
 
+fn take_screenshot(webview: &WebView) {
+    let wv = webview.clone();
+    wv.queue_draw();
+    glib::timeout_add_local(Duration::from_millis(300), move || {
+        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let shots_dir = root.join("screenshots");
+        let _ = std::fs::create_dir_all(&shots_dir);
+
+        let fname = chrono::Local::now().format("screenshot_%Y%m%d_%H%M%S.png").to_string();
+        let fpath = shots_dir.join(&fname);
+
+        let alloc = wv.allocation();
+        let w = alloc.width();
+        let h = alloc.height();
+
+        if w > 0 && h > 0 {
+            if let Ok(surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h) {
+                if let Ok(cr) = cairo::Context::new(&surface) {
+                    wv.draw(&cr);
+                    if let Ok(mut file) = std::fs::File::create(&fpath) {
+                        if surface.write_to_png(&mut file).is_ok() {
+                            let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                            println!("{} {}SCR{} saved → screenshots/{} ({}x{})", ts, GREEN, RESET, fname, w, h);
+                        }
+                    }
+                }
+            }
+        } else {
+             let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+             println!("{} {}ERR{} invalid webview size", ts, RED, RESET);
+        }
+        glib::ControlFlow::Break
+    });
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let mut port: u16 = 8080;
@@ -384,20 +419,49 @@ fn main() {
     size_btn.set_tooltip_text(Some("Change Device Size"));
 
     let menu = Menu::new();
+    let menu_wv_slot: Arc<Mutex<Option<WebView>>> = Arc::new(Mutex::new(None));
     for (name, &(w, h)) in &presets {
         let label = format!("{} ({}×{})", name.replace('-', " ").to_uppercase(), w, h);
         let item = MenuItem::with_label(&label);
         let win = window.clone();
         let n = name.to_string();
+        let menu_wv = menu_wv_slot.clone();
         item.connect_activate(move |_| {
-            println!("{}WIN{} {} ({}×{})", CYAN, RESET, n, w, h);
+            let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+            println!("{} {}WIN{} {} ({}×{})", ts, CYAN, RESET, n, w, h);
             win.resize(w, h);
+            if let Some(wv) = &*menu_wv.lock().unwrap() {
+                wv.queue_resize();
+                let wv_clone = wv.clone();
+                glib::timeout_add_local(Duration::from_millis(100), move || {
+                    wv_clone.queue_draw();
+                    glib::ControlFlow::Break
+                });
+            }
         });
         menu.append(&item);
     }
     menu.show_all();
     size_btn.set_popup(Some(&menu));
     hb.pack_start(&size_btn);
+
+    let shot_btn = gtk::Button::new();
+    shot_btn.set_image(Some(&gtk::Image::from_icon_name(
+        Some("camera-photo-symbolic"),
+        gtk::IconSize::Menu,
+    )));
+    shot_btn.set_tooltip_text(Some("Screenshot (screenshots/)"));
+    let shot_wv_slot: Arc<Mutex<Option<WebView>>> = Arc::new(Mutex::new(None));
+    let shot_wv_btn = shot_wv_slot.clone();
+    shot_btn.connect_clicked(move |_| {
+        if let Some(wv) = &*shot_wv_btn.lock().unwrap() {
+            take_screenshot(wv);
+        } else {
+            let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+            println!("{} {}ERR{} no webview available", ts, RED, RESET);
+        }
+    });
+    hb.pack_start(&shot_btn);
 
     let reload_btn = gtk::Button::with_label("🗲");
     reload_btn.set_tooltip_text(Some("Hot Reload (r)"));
@@ -450,6 +514,9 @@ fn main() {
     webview.load_uri("about:blank");
     webview.connect_context_menu(|_, _, _, _| true);
 
+    *menu_wv_slot.lock().unwrap() = Some(webview.clone());
+    *shot_wv_slot.lock().unwrap() = Some(webview.clone());
+
     let vbox = GtkBox::new(gtk::Orientation::Vertical, 0);
     vbox.pack_start(&webview, true, true, 0);
     window.add(&vbox);
@@ -470,20 +537,23 @@ fn main() {
         });
     }
 
-    // Hot restart - BYPASS Flutter's hot restart and just reload the page
+    // Hot restart
     {
+        let stdin_r = stdin_slot.clone();
         let url_r = current_url.clone();
         let wv = webview.clone();
         
         restart_btn.connect_clicked(move |_| {
-            println!("{}HOT{} restart - reloading page...", CYAN, RESET);
+            if let Some(stdin) = &mut *stdin_r.lock().unwrap() {
+                let _ = stdin.write_all(b"R\n");
+                let _ = stdin.flush();
+            }
+            println!("{}HOT{} hot restart", CYAN, RESET);
             
-            // Don't send 'R' - it causes the error
-            // Just reload the page directly - Flutter will detect file changes and rebuild
             let wv2 = wv.clone();
             let url2 = url_r.clone();
             
-            glib::timeout_add_local(Duration::from_millis(100), move || {
+            glib::timeout_add_local(Duration::from_millis(1500), move || {
                 if let Some(url) = &*url2.lock().unwrap() {
                     wv2.load_uri(url);
                 } else {
