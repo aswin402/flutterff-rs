@@ -1,10 +1,9 @@
-# ![flutterff-rs logo](asset/logo.png) flutterff-rs
-
+<img src="assets/logo.png" width="200" alt="Zed File Drop Logo">
 **A lightweight, ultra-fast Flutter Web development launcher for Linux.**
 
 Native mobile window experience using GTK + WebKit2. No Chrome, no topbar, less RAM.
 
-[![Version](https://img.shields.io/badge/version-1.5.0-cyan.svg)](#)
+[![Version](https://img.shields.io/badge/version-2.5.0-cyan.svg)](#)
 [![Platform](https://img.shields.io/badge/platform-linux-lightgrey.svg)](#)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#)
 
@@ -19,8 +18,9 @@ It mimics a real mobile device, providing quick access to common screen sizes an
 ## ✨ Features
 
 - **🛡️ Minimal RAM footprint**: Uses WebKit2GTK directly, avoiding the overhead of a full browser.
-- **📱 Device Presets**: Instantly switch between common mobile, tablet, and desktop sizes.
-- **⚡ Integrated Hot Reload**: dedicated lightning bolt button for Hot Reload ('r') and refresh button for Hot Restart ('R') that communicate directly with the Flutter process.
+- **📱 Device Presets**: Instantly switch between common mobile, tablet, and desktop sizes on the fly with reliable native window resizing.
+- **⚡ Integrated Hot Reload**: Dedicated lightning bolt button for Hot Reload ('r') and a refresh button for an instant UI Hot Restart.
+- **📸 Native Screenshots**: Safe native Webview surface capturing via Cairo that writes full-fidelity snapshots straight to the `screenshots/` folder.
 - **✈️ Offline Mode**: Auto-detects offline status and configures Flutter to use cached packages and local resources.
 - **🎨 Custom Sizes**: Pass any resolution (e.g., `--size 430x932`) for precise testing.
 - **🏗️ Zero Configuration**: Automatically finds free ports and hooks into your existing Flutter environment.
@@ -42,7 +42,7 @@ It mimics a real mobile device, providing quick access to common screen sizes an
 1.  **Process Management**: It spawns `flutter run -d web-server` as a child process.
 2.  **Stream Interception**: It monitors the Flutter process's `stdout` to detect when the local server is ready and capture the URL.
 3.  **Native Shell**: It creates a GTK3 window with an embedded WebKit2 WebView.
-4.  **Signal Hooking**: UI buttons in the HeaderBar inject characters ('r'/'R') into the Flutter process's `stdin` to trigger development features.
+4.  **Signal Hooking**: UI buttons in the HeaderBar inject characters ('r') into the Flutter process's `stdin` for Hot Reload, and safely simulate Hot Restart ('R') natively via webview reloads.
 5.  **Offline Logic**: It automatically adds `--no-pub` and `--no-web-resources-cdn` flags if no internet connection is detected, ensuring a smooth offline experience.
 
 ## 📂 Code Structure

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-const VERSION: &str = "2.4.0";
+const VERSION: &str = "2.5.0";
 
 const GREEN: &str = "\x1b[92m";
 const YELLOW: &str = "\x1b[93m";
@@ -401,13 +401,13 @@ fn main() {
     gtk::init().expect("Failed to initialize GTK");
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_title("🦊flutterff");
+    window.set_title("flutterff");
     window.set_default_size(width, height);
     window.set_resizable(true);
 
     let hb = HeaderBar::new();
     hb.set_show_close_button(true);
-    hb.set_title(Some("🦊flutterff"));
+    hb.set_title(Some("flutterff"));
     hb.set_decoration_layout(Some("menu:close"));
     window.set_titlebar(Some(&hb));
 
@@ -539,17 +539,14 @@ fn main() {
 
     // Hot restart
     {
-        let stdin_r = stdin_slot.clone();
         let url_r = current_url.clone();
         let wv = webview.clone();
         
         restart_btn.connect_clicked(move |_| {
-            if let Some(stdin) = &mut *stdin_r.lock().unwrap() {
-                let _ = stdin.write_all(b"R\n");
-                let _ = stdin.flush();
-            }
-            println!("{}HOT{} hot restart", CYAN, RESET);
+            println!("{}HOT{} restart - reloading page...", CYAN, RESET);
             
+            // Bypass sending 'R' directly as it causes Flutter exit/surface deleted error.
+            // Just simulate Hot Restart by reloading the webview (Flutter rebuilds automatically).
             let wv2 = wv.clone();
             let url2 = url_r.clone();
             
