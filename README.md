@@ -7,7 +7,7 @@
 **A lightweight, terminal-first Flutter Web development launcher & native mobile simulator for Linux.**  
 *Native GTK3 + WebKit2GTK viewport · 24-bit `cargo-pretty` live terminal TUI · Zero Chrome overhead.*
 
-[![Version](https://img.shields.io/badge/version-2.5.2-00E5FF?style=flat-square&labelColor=1E1E2E)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.5.3-00E5FF?style=flat-square&labelColor=1E1E2E)](CHANGELOG.md)
 [![Rust Edition](https://img.shields.io/badge/rust-2024%20(1.99%2B)-027DFD?style=flat-square&logo=rust&logoColor=white&labelColor=1E1E2E)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-linux%20(X11%20%2F%20Wayland)-50FA7B?style=flat-square&logo=linux&logoColor=white&labelColor=1E1E2E)](#)
 [![Design System](https://img.shields.io/badge/DESIGN.md-awesome--design--md-72EFDD?style=flat-square&labelColor=1E1E2E)](DESIGN.md)
@@ -21,7 +21,7 @@
 
 Launching a full Chromium instance or Android Emulator for Flutter UI iteration consumes gigabytes of RAM and clutters your workspace with browser chrome. **`flutterff-rs`** orchestrates `flutter run -d web-server` in a background thread and renders your app inside a minimal, chromeless **GTK3 + WebKit2GTK** window tailored to mobile, tablet, and desktop presets—paired with a 20 FPS **[`cargo-pretty`](https://github.com/romancitodev/cargo-pretty)**-style terminal UI.
 
-| Capability | Chrome / Standard Web | `flutterff-rs` v2.5.2 |
+| Capability | Chrome / Standard Web | `flutterff-rs` v2.5.3 |
 | :--- | :--- | :--- |
 | **Memory Footprint** | 800 MB – 2.5 GB+ | **Minimal (`WebKit2GTK` `DocumentViewer` cache)** |
 | **Window Chrome** | Tabs, omnibox, bookmarks bar | **Single minimal GTK3 `HeaderBar` (`menu:close`)** |
@@ -47,7 +47,7 @@ Launching a full Chromium instance or Android Emulator for Flutter UI iteration 
 During both local compilation (`./localinstall.sh` / `./localupdate.sh`) and `flutterff-rs` startup, the terminal renders a 20 FPS inline status view with RGB alpha-fading rows, per-step timers, and a sweeping Cyan-Blue-Mint progress ramp before settling into a clean summary card:
 
 ```text
-🦊 flutterff-rs v2.5.2
+🦊 flutterff-rs v2.5.3
 flutter run -d web-server --web-port=8080
 ────────────────────────────────────────
 Building
@@ -69,7 +69,7 @@ Elapsed       04.32s
 Once the local socket accepts connections, the live view settles into:
 
 ```text
-✓ flutterff-rs v2.5.2 serving in 4.86s
+✓ flutterff-rs v2.5.3 serving in 4.86s
   window         412×915 (mobile)
   server         http://localhost:8080
   mode           debug · online
@@ -157,8 +157,9 @@ Run `flutterff-rs` from the root of any Flutter project:
 flutterff-rs [OPTIONS]
 ```
 
-| Flag | Short | Description |
+| **Flag** | **Short** | **Description** |
 | :--- | :--- | :--- |
+| `--mcp` / `mcp` | | **Run as a native Model Context Protocol (MCP) JSON-RPC server over `stdio`.** |
 | `--size <PRESET\|WxH>` | `-s` | Set viewport size (`mobile`, `mobile-small`, `iphone`, `tablet`, `desktop`, or `WxH` e.g. `430x932`). |
 | `--port <PORT>` | `-p` | Set starting `web-server` HTTP port (default: `8080`, auto-increments if busy). |
 | `--offline` | | Force offline mode (`--no-pub --no-web-resources-cdn`). |
@@ -166,7 +167,42 @@ flutterff-rs [OPTIONS]
 | `--flavor <NAME>` | | Pass a custom `--flavor` to Flutter. |
 | `--no-hot` | | Disable hot reload support. |
 | `--list-sizes` | | Display all built-in device size presets and dimensions. |
-| `--version` | | Print `flutterff-rs` version (`v2.5.2`). |
+| `--version` | `-V` | Print `flutterff-rs` version (`v2.5.3`). |
+| `--help` | `-h` | Print CLI help information. |
+
+---
+
+## 🤖 Native Rust MCP Server (`flutterff-rs --mcp`)
+
+`flutterff-rs` includes a **zero-dependency, ultra-lightweight Rust-native MCP server** (`src/mcp.rs`) that bridges AI coding agents (Claude Code, Cursor, Antigravity, Windsurf, Zed) directly to the live GTK3 + WebKit2 simulator window over a local Unix domain socket (`$XDG_RUNTIME_DIR/flutterff-rs.sock`).
+
+### MCP Configuration (`mcp_config.json` / `.mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "flutterff": {
+      "command": "flutterff-rs",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+### Exposed MCP Tools & Resources
+
+| MCP Tool / Resource | Description |
+| :--- | :--- |
+| **`flutter_status`** | Returns live JSON status (running state, URL, port, window size, mode, log count). |
+| **`flutter_launch`** | Spawns a new `flutterff-rs` simulator window (`project_dir`, `size`, `port`, `offline`, `profile`, `flavor`). |
+| **`flutter_hot_reload`** | Injects `'r'` into the running Flutter daemon for instant Hot Reload. |
+| **`flutter_hot_restart`** | Triggers a crash-safe WebView Hot Restart. |
+| **`flutter_resize`** | Dynamically resizes the GTK window to any preset (`mobile`, `iphone`, `tablet`, `desktop`) or custom `WxH`. |
+| **`flutter_screenshot`** | Captures a native Cairo `ARgb32` PNG snapshot (`screenshots/screenshot_*.png`) and returns inline base64 `image/png` content. |
+| **`flutter_logs`** | Reads recent filtered Flutter & WebView logs (`INF`, `WRN`, `ERR`, `DBG`) with optional `limit`, `level`, and `clear`. |
+| **`flutter_eval_js`** | Evaluates arbitrary JavaScript inside the live WebKit2 WebView. |
+| **`flutter_stop`** | Gracefully stops the Flutter daemon (`'q'`) and closes the simulator window. |
+| **`flutterff://status` · `flutterff://logs` · `flutterff://presets`** | Built-in MCP Resources for querying live simulator state, logs, and viewport presets. |
 
 ### Built-in Device Presets
 
@@ -182,9 +218,10 @@ flutterff-rs [OPTIONS]
 
 ## 📂 Repository Layout
 
-- **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.2`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5`, `chrono 0.4.45` — zero `regex` dependency).
+- **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.3`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5`, `chrono 0.4.45` — zero `regex` dependency).
 - **[`.cargo/config.toml`](.cargo/config.toml)** — Enforces single-job (`jobs = 1` / `-j 1`) Cargo builds and checks.
-- **[`src/main.rs`](src/main.rs)** — Core launcher, GTK3/WebKit2 window shell, Cairo screenshot engine, and `cargo-pretty` terminal TUI.
+- **[`src/main.rs`](src/main.rs)** — Core launcher, GTK3/WebKit2 window shell, Cairo screenshot engine, local Unix IPC bridge, and `cargo-pretty` terminal TUI.
+- **[`src/mcp.rs`](src/mcp.rs)** — Zero-dependency native Rust Model Context Protocol (MCP) JSON-RPC 2.0 server, minimal JSON parser/serializer, and base64 PNG encoder.
 - **[`DESIGN.md`](DESIGN.md)** — Semantic design system specification ([VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md) format).
 - **[`CHANGELOG.md`](CHANGELOG.md)** — Version history and release notes.
 - **[`docs/`](docs/)** — Detailed guides on [architecture](docs/architecture.md), [dependencies](docs/modifications_and_packages.md), [installation](docs/setup_and_installation.md), and [usage](docs/usage_and_examples.md).

@@ -17,6 +17,8 @@ flutterff-rs [OPTIONS]
 | `--flavor`   |          | Specifies the web flavor setting.                                           |
 | `--no-hot`   |          | Disables hot reload.                                                        |
 | `--list-sizes`|         | Print the dimensions of the preset size options.                            |
+| `--mcp`      | `mcp`    | Runs `flutterff-rs` as a native Model Context Protocol (MCP) server over `stdio`. |
+| `--help`     | `-h`     | Prints CLI usage and options.                                               |
 
 ## Practical Examples
 

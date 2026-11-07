@@ -1,3 +1,5 @@
+mod mcp;
+
 use gtk::prelude::*;
 use gtk::{Box as GtkBox, HeaderBar, Menu, MenuButton, MenuItem};
 use webkit2gtk::{
@@ -5,26 +7,31 @@ use webkit2gtk::{
     UserScriptInjectionTime, WebContext, WebContextExt, WebView, WebViewExt, WebViewExtManual,
 };
 
+use std::collections::VecDeque;
 use std::env;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const PKG_NAME: &str = env!("CARGO_PKG_NAME");
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+use mcp::{IpcCommand, IpcRequest, j_bool, j_num, j_obj, j_str};
+
+pub const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const DEFAULT_PORT: u16 = 8080;
 const PORT_SCAN_RANGE: u16 = 120;
-const DEFAULT_PRESET: &str = "mobile";
+pub const DEFAULT_PRESET: &str = "mobile";
 const SEPARATOR_WIDTH: usize = 40;
 const BAR_WIDTH: usize = 28;
 const MIN_NAME_WIDTH: usize = 32;
 const BUILDING_ROWS: usize = 4;
 const DONE_ROWS: usize = 5;
+const MAX_LOG_HISTORY: usize = 500;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Unified 24-bit Truecolor Theme Palette (Single Source of Truth)
@@ -69,7 +76,7 @@ const FLUTTERFF_RAMP: &[Rgb] = &[
 ];
 
 /// Deterministic ordered device presets (zero heap allocation)
-const DEVICE_PRESETS: &[(&str, (i32, i32))] = &[
+pub const DEVICE_PRESETS: &[(&str, (i32, i32))] = &[
     ("mobile", (412, 915)),
     ("mobile-small", (360, 800)),
     ("iphone", (390, 844)),
@@ -198,6 +205,9 @@ impl Step {
 struct PrettyProgress {
     flag_line: String,
     window_label: String,
+    width: i32,
+    height: i32,
+    port: u16,
     mode_label: String,
     seen: usize,
     building: Vec<(Step, String, Instant)>,
@@ -207,13 +217,24 @@ struct PrettyProgress {
     server_url: Option<String>,
     error_msg: Option<String>,
     queued_logs: Vec<String>,
+    log_history: VecDeque<String>,
 }
 
 impl PrettyProgress {
-    fn new(flag_line: String, window_label: String, mode_label: String) -> Self {
+    fn new(
+        flag_line: String,
+        window_label: String,
+        width: i32,
+        height: i32,
+        port: u16,
+        mode_label: String,
+    ) -> Self {
         Self {
             flag_line,
             window_label,
+            width,
+            height,
+            port,
             mode_label,
             seen: 0,
             building: Vec::new(),
@@ -223,6 +244,7 @@ impl PrettyProgress {
             server_url: None,
             error_msg: None,
             queued_logs: Vec::new(),
+            log_history: VecDeque::with_capacity(MAX_LOG_HISTORY),
         }
     }
 
@@ -246,7 +268,15 @@ impl PrettyProgress {
             .push((done_label.unwrap_or(default_label), secs.max(0.01)));
     }
 
+    fn push_history(&mut self, plain_line: String) {
+        if self.log_history.len() >= MAX_LOG_HISTORY {
+            self.log_history.pop_front();
+        }
+        self.log_history.push_back(plain_line);
+    }
+
     fn log_or_print(&mut self, formatted: String) {
+        self.push_history(strip_ansi(&formatted));
         if self.tui_finished {
             println!("{}", formatted);
         } else {
@@ -464,6 +494,14 @@ fn spawn_pretty_tui(progress: Arc<Mutex<PrettyProgress>>, started: Instant) {
                 "{}  {:<15}{}{}{}",
                 DIM, "mode", RESET, TEXT, guard.mode_label
             );
+            println!(
+                "{}  {:<15}{}{}{}",
+                DIM,
+                "mcp socket",
+                RESET,
+                SUB,
+                mcp::socket_path().display()
+            );
             println!("{}{}{}", DIM, sep, RESET);
         } else {
             println!(
@@ -485,14 +523,14 @@ fn spawn_pretty_tui(progress: Arc<Mutex<PrettyProgress>>, started: Instant) {
 // ─────────────────────────────────────────────────────────────────────────────
 //  Pure Algorithmic Helpers (Zero Regex, Zero Redundant Allocations)
 // ─────────────────────────────────────────────────────────────────────────────
-fn find_preset(name: &str) -> Option<(i32, i32)> {
+pub fn find_preset(name: &str) -> Option<(i32, i32)> {
     DEVICE_PRESETS
         .iter()
         .find(|&&(preset, _)| preset.eq_ignore_ascii_case(name))
         .map(|&(_, dims)| dims)
 }
 
-fn parse_size(s: &str) -> Result<(i32, i32), String> {
+pub fn parse_size(s: &str) -> Result<(i32, i32), String> {
     let (w_str, h_str) = s
         .split_once(['x', 'X'])
         .ok_or_else(|| format!("Invalid size '{}'. Use WxH e.g. 390x844", s))?;
@@ -506,6 +544,15 @@ fn parse_size(s: &str) -> Result<(i32, i32), String> {
         return Err(format!("Dimensions must be positive: {}x{}", w, h));
     }
     Ok((w, h))
+}
+
+pub fn resolve_dimensions(size_str: &str) -> Result<(i32, i32, String), String> {
+    if let Some((w, h)) = find_preset(size_str) {
+        Ok((w, h, size_str.to_lowercase()))
+    } else {
+        let (w, h) = parse_size(size_str)?;
+        Ok((w, h, "custom".to_string()))
+    }
 }
 
 fn is_port_free(port: u16) -> bool {
@@ -533,7 +580,7 @@ fn check_online() -> bool {
 }
 
 /// O(n) single-pass ANSI escape sequence stripper (no regex needed)
-fn strip_ansi(s: &str) -> String {
+pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_escape = false;
     for c in s.chars() {
@@ -725,6 +772,7 @@ fn run_flutter(
     if let Some(mut c) = child_slot.lock().unwrap().take() {
         let _ = c.wait();
     }
+    mcp::cleanup_socket();
     print!("\x1b[?25h");
     let _ = std::io::stdout().flush();
     glib::idle_add(|| {
@@ -733,42 +781,50 @@ fn run_flutter(
     });
 }
 
+fn capture_screenshot_surface(webview: &WebView) -> Result<(PathBuf, i32, i32), String> {
+    let root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let shots_dir = root.join("screenshots");
+    let _ = std::fs::create_dir_all(&shots_dir);
+
+    let fname = chrono::Local::now()
+        .format("screenshot_%Y%m%d_%H%M%S.png")
+        .to_string();
+    let fpath = shots_dir.join(&fname);
+
+    let alloc = webview.allocation();
+    let (w, h) = (alloc.width(), alloc.height());
+    if w <= 0 || h <= 0 {
+        return Err("invalid webview size".to_string());
+    }
+
+    let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h)
+        .map_err(|e| format!("cairo surface error: {}", e))?;
+    let cr = cairo::Context::new(&surface).map_err(|e| format!("cairo context error: {}", e))?;
+    webview.draw(&cr);
+
+    let mut file =
+        std::fs::File::create(&fpath).map_err(|e| format!("file create error: {}", e))?;
+    surface
+        .write_to_png(&mut file)
+        .map_err(|e| format!("png write error: {}", e))?;
+
+    print_tagged_event(
+        "SCR",
+        GREEN,
+        &format!(
+            "saved → screenshots/{} {}({}×{}){}",
+            fname, SUB, w, h, RESET
+        ),
+    );
+    Ok((fpath, w, h))
+}
+
 fn take_screenshot(webview: &WebView) {
     let wv = webview.clone();
     wv.queue_draw();
     glib::timeout_add_local(Duration::from_millis(300), move || {
-        let root = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let shots_dir = root.join("screenshots");
-        let _ = std::fs::create_dir_all(&shots_dir);
-
-        let fname = chrono::Local::now()
-            .format("screenshot_%Y%m%d_%H%M%S.png")
-            .to_string();
-        let fpath = shots_dir.join(&fname);
-
-        let alloc = wv.allocation();
-        let (w, h) = (alloc.width(), alloc.height());
-
-        if w > 0
-            && h > 0
-            && let Ok(surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h)
-            && let Ok(cr) = cairo::Context::new(&surface)
-        {
-            wv.draw(&cr);
-            if let Ok(mut file) = std::fs::File::create(&fpath)
-                && surface.write_to_png(&mut file).is_ok()
-            {
-                print_tagged_event(
-                    "SCR",
-                    GREEN,
-                    &format!(
-                        "saved → screenshots/{} {}({}×{}){}",
-                        fname, SUB, w, h, RESET
-                    ),
-                );
-            }
-        } else {
-            print_tagged_event("ERR", RED, "invalid webview size");
+        if let Err(err) = capture_screenshot_surface(&wv) {
+            print_tagged_event("ERR", RED, &err);
         }
         glib::ControlFlow::Break
     });
@@ -779,6 +835,7 @@ fn take_screenshot(webview: &WebView) {
 // ─────────────────────────────────────────────────────────────────────────────
 enum CliAction {
     Run(CliConfig),
+    McpServer,
     ShowVersion,
     ShowHelp,
     ListSizes,
@@ -819,6 +876,7 @@ impl CliConfig {
             };
 
             match flag {
+                "mcp" | "--mcp" => return Ok(CliAction::McpServer),
                 "--version" | "-V" => return Ok(CliAction::ShowVersion),
                 "--help" | "-h" => return Ok(CliAction::ShowHelp),
                 "--list-sizes" => return Ok(CliAction::ListSizes),
@@ -847,9 +905,14 @@ fn print_help() {
         BOLD, CYAN, PKG_NAME, RESET, DIM, VERSION, RESET
     );
     println!("{}USAGE:{}", BOLD, RESET);
-    println!("  {} [OPTIONS]\n", PKG_NAME);
+    println!("  {} [OPTIONS]", PKG_NAME);
+    println!("  {} --mcp\n", PKG_NAME);
     println!("{}OPTIONS:{}", BOLD, RESET);
     let opts = [
+        (
+            "    --mcp, mcp",
+            "Run as a native Model Context Protocol (MCP) JSON-RPC server over stdio",
+        ),
         (
             "-s, --size <PRESET|WxH>",
             "Viewport size preset or custom WxH (default: mobile)",
@@ -902,6 +965,10 @@ fn main() {
     let started = Instant::now();
 
     let mut cfg = match CliConfig::parse(env::args()) {
+        Ok(CliAction::McpServer) => {
+            mcp::run_mcp_server();
+            return;
+        }
         Ok(CliAction::ShowVersion) => {
             println!("{} v{}", PKG_NAME, VERSION);
             return;
@@ -921,15 +988,12 @@ fn main() {
         }
     };
 
-    let (width, height, size_label) = match find_preset(&cfg.size_str) {
-        Some((w, h)) => (w, h, cfg.size_str.as_str()),
-        None => match parse_size(&cfg.size_str) {
-            Ok((w, h)) => (w, h, "custom"),
-            Err(e) => {
-                eprintln!("{}{}{}", RED, e, RESET);
-                std::process::exit(1);
-            }
-        },
+    let (width, height, size_label) = match resolve_dimensions(&cfg.size_str) {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("{}{}{}", RED, e, RESET);
+            std::process::exit(1);
+        }
     };
 
     if !is_port_free(cfg.port) {
@@ -950,17 +1014,17 @@ fn main() {
         format!("--web-port={}", cfg.port),
     ];
 
-    if cfg.profile {
-        flutter_cmd.push("--profile".to_string());
-    }
-    if cfg.no_hot {
-        flutter_cmd.push("--no-hot".to_string());
+    for (enabled, flags) in [
+        (cfg.profile, &["--profile"][..]),
+        (cfg.no_hot, &["--no-hot"][..]),
+        (cfg.offline, &["--no-pub", "--no-web-resources-cdn"][..]),
+    ] {
+        if enabled {
+            flutter_cmd.extend(flags.iter().map(|s| (*s).to_string()));
+        }
     }
     if let Some(f) = &cfg.flavor {
         flutter_cmd.extend(["--flavor".to_string(), f.clone()]);
-    }
-    if cfg.offline {
-        flutter_cmd.extend(["--no-pub".to_string(), "--no-web-resources-cdn".to_string()]);
     }
 
     let flag_line = flutter_cmd.join(" ");
@@ -974,6 +1038,9 @@ fn main() {
     let progress = Arc::new(Mutex::new(PrettyProgress::new(
         flag_line,
         window_label,
+        width,
+        height,
+        cfg.port,
         mode_label,
     )));
 
@@ -995,7 +1062,6 @@ fn main() {
 
     gtk::init().expect("Failed to initialize GTK");
 
-    // Initialize WebKit2 context, JS console bridge, and WebView first so UI controls capture it directly
     let context = WebContext::default().unwrap();
     context.set_cache_model(CacheModel::DocumentViewer);
 
@@ -1026,13 +1092,13 @@ fn main() {
     webview.connect_context_menu(|_, _, _, _| true);
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_title("flutterff");
+    window.set_title(PKG_NAME);
     window.set_default_size(width, height);
     window.set_resizable(true);
 
     let hb = HeaderBar::new();
     hb.set_show_close_button(true);
-    hb.set_title(Some("flutterff"));
+    hb.set_title(Some(PKG_NAME));
     hb.set_decoration_layout(Some("menu:close"));
     window.set_titlebar(Some(&hb));
 
@@ -1049,7 +1115,14 @@ fn main() {
         let item = MenuItem::with_label(&label);
         let win = window.clone();
         let wv = webview.clone();
+        let prog_win = progress.clone();
         item.connect_activate(move |_| {
+            {
+                let mut pr = prog_win.lock().unwrap();
+                pr.width = w;
+                pr.height = h;
+                pr.window_label = format!("{}×{} ({})", w, h, name);
+            }
             print_tagged_event(
                 "WIN",
                 CYAN,
@@ -1131,10 +1204,11 @@ fn main() {
         });
     }
 
-    // Graceful daemon quit ('q\n') + process cleanup on window close
+    // Graceful daemon quit ('q\n') + socket cleanup on window close
     let child_destroy = child_slot.clone();
     let stdin_destroy = stdin_slot.clone();
     window.connect_destroy(move |_| {
+        mcp::cleanup_socket();
         if let Some(mut stdin) = stdin_destroy.lock().unwrap().take() {
             let _ = stdin.write_all(b"q\n");
             let _ = stdin.flush();
@@ -1154,6 +1228,146 @@ fn main() {
         Step::GtkShell,
         Some(format!("{} ({}×{})", Step::GtkShell.label(), width, height)),
     );
+
+    // Spawn local IPC Unix socket listener so `flutterff-rs --mcp` can control this window
+    let (ipc_tx, ipc_rx) = mpsc::channel::<IpcRequest>();
+    mcp::spawn_ipc_listener(ipc_tx);
+
+    {
+        let win_ipc = window.clone();
+        let wv_ipc = webview.clone();
+        let stdin_ipc = stdin_slot.clone();
+        let url_ipc = current_url.clone();
+        let prog_ipc = progress.clone();
+
+        glib::timeout_add_local(Duration::from_millis(50), move || {
+            while let Ok(req) = ipc_rx.try_recv() {
+                let resp =
+                    match req.cmd {
+                        IpcCommand::Status => {
+                            let pr = prog_ipc.lock().unwrap();
+                            j_obj([
+                                ("running", j_bool(true)),
+                                ("version", j_str(VERSION)),
+                                ("ready", j_bool(pr.settled == Some(true))),
+                                (
+                                    "url",
+                                    j_str(pr.server_url.clone().unwrap_or_else(|| {
+                                        format!("http://localhost:{}", pr.port)
+                                    })),
+                                ),
+                                ("port", j_num(pr.port as f64)),
+                                ("window", j_str(pr.window_label.clone())),
+                                ("width", j_num(pr.width as f64)),
+                                ("height", j_num(pr.height as f64)),
+                                ("mode", j_str(pr.mode_label.clone())),
+                                ("logs_count", j_num(pr.log_history.len() as f64)),
+                            ])
+                        }
+                        IpcCommand::HotReload => {
+                            if let Some(stdin) = &mut *stdin_ipc.lock().unwrap() {
+                                let _ = stdin.write_all(b"r\n");
+                                let _ = stdin.flush();
+                            }
+                            print_tagged_event("HOT", CYAN, "reload (mcp)");
+                            j_obj([("ok", j_bool(true)), ("action", j_str("hot_reload"))])
+                        }
+                        IpcCommand::HotRestart => {
+                            print_tagged_event("HOT", CYAN, "restart · reloading webview (mcp)...");
+                            match &*url_ipc.lock().unwrap() {
+                                Some(url) => wv_ipc.load_uri(url),
+                                None => wv_ipc.reload(),
+                            }
+                            j_obj([("ok", j_bool(true)), ("action", j_str("hot_restart"))])
+                        }
+                        IpcCommand::Resize { size } => match resolve_dimensions(&size) {
+                            Ok((w, h, label)) => {
+                                {
+                                    let mut pr = prog_ipc.lock().unwrap();
+                                    pr.width = w;
+                                    pr.height = h;
+                                    pr.window_label = format!("{}×{} ({})", w, h, label);
+                                }
+                                win_ipc.resize(w, h);
+                                wv_ipc.queue_resize();
+                                wv_ipc.queue_draw();
+                                print_tagged_event(
+                                    "WIN",
+                                    CYAN,
+                                    &format!("{} {}({}×{} mcp){}", label, SUB, w, h, RESET),
+                                );
+                                j_obj([
+                                    ("ok", j_bool(true)),
+                                    ("width", j_num(w as f64)),
+                                    ("height", j_num(h as f64)),
+                                    ("preset", j_str(label)),
+                                ])
+                            }
+                            Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
+                        },
+                        IpcCommand::Screenshot => {
+                            wv_ipc.queue_draw();
+                            match capture_screenshot_surface(&wv_ipc) {
+                                Ok((path, w, h)) => j_obj([
+                                    ("ok", j_bool(true)),
+                                    ("path", j_str(path.to_string_lossy().to_string())),
+                                    ("width", j_num(w as f64)),
+                                    ("height", j_num(h as f64)),
+                                ]),
+                                Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
+                            }
+                        }
+                        IpcCommand::Logs {
+                            limit,
+                            level,
+                            clear,
+                        } => {
+                            let mut pr = prog_ipc.lock().unwrap();
+                            let lvl_upper = level.as_ref().map(|s| s.to_uppercase());
+                            let matched: Vec<String> = pr
+                                .log_history
+                                .iter()
+                                .rev()
+                                .filter(|line| match &lvl_upper {
+                                    Some(l) => line.contains(l.as_str()),
+                                    None => true,
+                                })
+                                .take(limit)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect();
+                            if clear {
+                                pr.log_history.clear();
+                            }
+                            j_obj([
+                                ("ok", j_bool(true)),
+                                ("count", j_num(matched.len() as f64)),
+                                ("logs", j_str(matched.join("\n"))),
+                            ])
+                        }
+                        IpcCommand::EvalJs { script } => {
+                            let cancel: Option<&gtk::gio::Cancellable> = None;
+                            wv_ipc.evaluate_javascript(&script, None, None, cancel, |_| {});
+                            j_obj([
+                                ("ok", j_bool(true)),
+                                ("action", j_str("eval_js_dispatched")),
+                            ])
+                        }
+                        IpcCommand::Stop => {
+                            let _ = req
+                                .reply_tx
+                                .send(j_obj([("ok", j_bool(true)), ("action", j_str("stopping"))]));
+                            win_ipc.close();
+                            return glib::ControlFlow::Break;
+                        }
+                    };
+                let _ = req.reply_tx.send(resp);
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 
     let (url_tx, url_rx) = mpsc::channel();
     let c_slot = child_slot.clone();
@@ -1195,7 +1409,6 @@ fn main() {
                         glib::ControlFlow::Continue
                     }
                 });
-                // Stop the outer channel polling timer once the URL has arrived
                 glib::ControlFlow::Break
             }
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,

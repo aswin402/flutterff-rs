@@ -1,5 +1,5 @@
 ---
-version: "2.5.2"
+version: "2.5.3"
 name: flutterff-rs-design-system
 description: "Semantic design system for flutterff-rs — a terminal-first, ultra-lightweight Linux GTK3 + WebKit2GTK mobile simulator and CLI orchestrator for Flutter Web. Combines Catppuccin Mocha dark-mode surfaces with Electric Cyan (#00E5FF), Flutter Blue (#027DFD), and Neon Mint (#50FA7B) 24-bit Truecolor terminal telemetry inspired by cargo-pretty."
 
