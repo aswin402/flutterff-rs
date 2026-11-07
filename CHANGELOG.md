@@ -30,6 +30,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Modular Source Architecture (`src/`)**:
   - Split `src/main.rs` (`1,502` → `579` lines) into focused modules: `src/config.rs` (presets, CLI parsing, pointer thresholds), `src/theme.rs` (24-bit Truecolor palette & ramp), `src/tui.rs` (`cargo-pretty` progress renderer), `src/flutter.rs` (daemon spawning, port prober, ANSI stripper, log classifier), and `src/screenshot.rs` (Cairo `ARgb32` PNG snapshot capture).
   - Split `src/mcp.rs` (`1,176` lines) into `src/mcp/mod.rs` (JSON-RPC 2.0 `stdio` loop & tool dispatch), `src/mcp/schema.rs` (`TOOL_SPECS`, `WEB_AGENT_TOOL_MAP`, `RESOURCE_SPECS`), `src/mcp/json.rs` (byte-slice `JsonVal` parser/serializer & `base64_encode`), and `src/mcp/ipc.rs` (Unix domain socket IPC server & `IpcCommand`).
+- **RAM & CPU Efficiency Optimizations**:
+  - **WebKit2GTK Low-Memory Configuration**: Disabled back/forward page cache, offline AppCache, HTML5 WebSQL database, DNS prefetching, hyperlink auditing, and developer extras (`configure_low_memory_webview`), and added `context.clear_cache()` on Hot Restart.
+  - **Zero-Polling Event-Driven IPC**: Replaced the 50ms continuous GTK polling timer (`20 wakeups/sec`) and per-request thread spawning with a single `ff-ipc` worker thread that wakes the GTK main loop on-demand via `glib::idle_add` (`0.0%` idle CPU).
+  - **Compact Worker Stacks (`256 KiB`)**: Reduced background thread virtual stack reservations from `8 MiB` to `256 KiB` (`spawn_compact_thread`) and freed startup TUI vectors immediately after settle.
+  - **Zero-Allocation Hot Paths & Dependency Diet**: Removed the `chrono` crate (using `glib::DateTime::now_local()`), replaced `.lines()` and `.to_lowercase()` allocations in `src/flutter.rs` with reusable line buffers, `Cow<str>` ANSI stripping, and ASCII case-insensitive window matching, reducing the stripped binary from `764 KB` to `694 KB`.
 
 ---
 

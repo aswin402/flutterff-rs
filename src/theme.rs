@@ -62,7 +62,17 @@ pub fn sample_flutterff_ramp(t: f32) -> Rgb {
 }
 
 pub fn now_timestamp() -> String {
-    chrono::Local::now().format("%H:%M:%S").to_string()
+    glib::DateTime::now_local()
+        .and_then(|dt| dt.format("%H:%M:%S"))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "00:00:00".to_string())
+}
+
+pub fn now_file_stamp() -> String {
+    glib::DateTime::now_local()
+        .and_then(|dt| dt.format("screenshot_%Y%m%d_%H%M%S.png"))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "screenshot.png".to_string())
 }
 
 pub fn print_tagged_event(tag: &str, tag_color: &str, message: &str) {

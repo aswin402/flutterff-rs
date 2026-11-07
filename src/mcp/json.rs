@@ -41,7 +41,7 @@ impl JsonVal {
     }
 
     pub fn to_json(&self) -> String {
-        let mut out = String::new();
+        let mut out = String::with_capacity(128);
         self.write_json(&mut out);
         out
     }
@@ -57,21 +57,7 @@ impl JsonVal {
                     out.push_str(&n.to_string());
                 }
             }
-            Self::Str(s) => {
-                out.push('"');
-                for c in s.chars() {
-                    match c {
-                        '"' => out.push_str("\\\""),
-                        '\\' => out.push_str("\\\\"),
-                        '\n' => out.push_str("\\n"),
-                        '\r' => out.push_str("\\r"),
-                        '\t' => out.push_str("\\t"),
-                        c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                        c => out.push(c),
-                    }
-                }
-                out.push('"');
-            }
+            Self::Str(s) => write_escaped_str(s, out),
             Self::Arr(items) => {
                 out.push('[');
                 for (i, item) in items.iter().enumerate() {
@@ -88,7 +74,7 @@ impl JsonVal {
                     if i > 0 {
                         out.push(',');
                     }
-                    Self::Str(k.clone()).write_json(out);
+                    write_escaped_str(k, out);
                     out.push(':');
                     v.write_json(out);
                 }
@@ -105,6 +91,22 @@ impl JsonVal {
         skip_ws(bytes, &mut pos);
         Ok(val)
     }
+}
+
+fn write_escaped_str(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 fn skip_ws(bytes: &[u8], pos: &mut usize) {
@@ -143,7 +145,18 @@ fn parse_string(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
     *pos += 1;
     let mut out = String::new();
     while *pos < bytes.len() {
-        let b = bytes[*pos];
+        let start = *pos;
+        while *pos < bytes.len() && bytes[*pos] != b'"' && bytes[*pos] != b'\\' {
+            *pos += 1;
+        }
+        if *pos > start {
+            let chunk = std::str::from_utf8(&bytes[start..*pos])
+                .map_err(|_| "Invalid UTF-8 in JSON string".to_string())?;
+            out.push_str(chunk);
+        }
+        let b = *bytes
+            .get(*pos)
+            .ok_or_else(|| "Unterminated string".to_string())?;
         *pos += 1;
         match b {
             b'"' => return Ok(out),
@@ -177,14 +190,7 @@ fn parse_string(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
                     other => out.push(other as char),
                 }
             }
-            _ => {
-                let start = *pos - 1;
-                let rest = std::str::from_utf8(&bytes[start..])
-                    .map_err(|_| "Invalid UTF-8 in JSON string".to_string())?;
-                let ch = rest.chars().next().unwrap();
-                *pos = start + ch.len_utf8();
-                out.push(ch);
-            }
+            _ => unreachable!(),
         }
     }
     Err("Unterminated string".to_string())

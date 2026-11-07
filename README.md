@@ -224,7 +224,7 @@ flutterff-rs [OPTIONS]
 
 ## 📂 Repository Layout
 
-- **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.4`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5`, `chrono 0.4.45` — zero `regex` dependency).
+- **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.4`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5` — zero `regex` or `chrono` dependency).
 - **[`.cargo/config.toml`](.cargo/config.toml)** — Enforces single-job (`jobs = 1` / `-j 1`) Cargo builds and checks.
 - **[`src/main.rs`](src/main.rs)** — GTK3 + WebKit2 simulator window orchestration, keyboard shortcuts (`r`/`R`/`s`/`c`/`h`/`q`), and runtime event loop.
 - **[`src/config.rs`](src/config.rs)** — Runtime constants, device viewport presets (`DEVICE_PRESETS`), adaptive pointer mode thresholds, and CLI argument parser.

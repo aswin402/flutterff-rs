@@ -813,6 +813,17 @@
       }
       state.inspectVisible =
         typeof payload.enabled === "boolean" ? payload.enabled : !state.inspectVisible;
+      if (!state.inspectVisible) {
+        state.selectorMap = [];
+        renderInspectorBoxes();
+        sendMcpReply(reqId, {
+          ok: true,
+          inspect_overlay: false,
+          pointer_mode: effectivePointerMode(),
+          elements_indexed: 0
+        });
+        return;
+      }
       ensureFlutterSemantics(function (semActive) {
         var items = buildUiTree(true);
         renderInspectorBoxes();

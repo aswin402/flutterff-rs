@@ -5,16 +5,14 @@ use std::time::Duration;
 use gtk::prelude::*;
 use webkit2gtk::WebView;
 
-use crate::theme::{GREEN, RED, RESET, SUB, print_tagged_event};
+use crate::theme::{GREEN, RED, RESET, SUB, now_file_stamp, print_tagged_event};
 
 pub fn capture_screenshot_surface(webview: &WebView) -> Result<(PathBuf, i32, i32), String> {
     let root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let shots_dir = root.join("screenshots");
     let _ = std::fs::create_dir_all(&shots_dir);
 
-    let fname = chrono::Local::now()
-        .format("screenshot_%Y%m%d_%H%M%S.png")
-        .to_string();
+    let fname = now_file_stamp();
     let fpath = shots_dir.join(&fname);
 
     let alloc = webview.allocation();

@@ -26,18 +26,23 @@ const LAUNCH_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
 pub fn run_mcp_server() {
     let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
     let mut stdout = std::io::stdout();
+    let mut line = String::with_capacity(512);
 
-    for line in stdin.lock().lines().map_while(Result::ok) {
+    while handle.read_line(&mut line).is_ok_and(|n| n > 0) {
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            line.clear();
             continue;
         }
         let Ok(msg) = JsonVal::parse(trimmed) else {
+            line.clear();
             continue;
         };
 
         let Some(req_id) = msg.get("id").cloned() else {
+            line.clear();
             continue;
         };
         let method = msg.get("method").and_then(JsonVal::as_str).unwrap_or("");
@@ -71,6 +76,7 @@ pub fn run_mcp_server() {
 
         let _ = writeln!(stdout, "{}", response.to_json());
         let _ = stdout.flush();
+        line.clear();
     }
 }
 

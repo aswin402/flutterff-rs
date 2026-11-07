@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{
     BAR_WIDTH, BUILDING_ROWS, DONE_ROWS, MAX_LOG_HISTORY, MIN_NAME_WIDTH, PKG_NAME,
-    SEPARATOR_WIDTH, VERSION,
+    SEPARATOR_WIDTH, VERSION, spawn_compact_thread,
 };
 use crate::flutter::strip_ansi;
 use crate::mcp;
@@ -112,7 +112,7 @@ impl PrettyProgress {
     }
 
     pub fn log_or_print(&mut self, formatted: String) {
-        self.push_history(strip_ansi(&formatted));
+        self.push_history(strip_ansi(&formatted).into_owned());
         if self.tui_finished {
             println!("{}", formatted);
         } else {
@@ -122,7 +122,7 @@ impl PrettyProgress {
 }
 
 pub fn spawn_pretty_tui(progress: Arc<Mutex<PrettyProgress>>, started: Instant) {
-    thread::spawn(move || {
+    spawn_compact_thread("ff-tui", move || {
         let mut drawn_lines: usize = 0;
         let sep = "─".repeat(SEPARATOR_WIDTH);
         print!("\x1b[?25l");
@@ -352,6 +352,11 @@ pub fn spawn_pretty_tui(progress: Arc<Mutex<PrettyProgress>>, started: Instant) 
         for log in guard.queued_logs.drain(..) {
             println!("{}", log);
         }
+        guard.queued_logs.shrink_to_fit();
+        guard.building.clear();
+        guard.building.shrink_to_fit();
+        guard.done.clear();
+        guard.done.shrink_to_fit();
         guard.tui_finished = true;
     });
 }

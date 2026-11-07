@@ -2,12 +2,11 @@ use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
-use std::sync::mpsc;
-use std::thread;
+use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, mpsc};
 use std::time::Duration;
 
-use crate::config::{DEFAULT_PRESET, PKG_NAME};
+use crate::config::{DEFAULT_PRESET, PKG_NAME, spawn_compact_thread};
 
 use super::json::{JsonVal, j_arr, j_bool, j_obj, j_str};
 use super::schema::WEB_AGENT_TOOL_MAP;
@@ -15,11 +14,15 @@ use super::schema::WEB_AGENT_TOOL_MAP;
 pub const DEFAULT_LOG_LIMIT: u64 = 50;
 pub const IPC_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub fn socket_path() -> PathBuf {
-    let base = env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir);
-    base.join(format!("{}.sock", PKG_NAME))
+static SOCKET_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn socket_path() -> &'static Path {
+    SOCKET_PATH.get_or_init(|| {
+        let base = env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir);
+        base.join(format!("{}.sock", PKG_NAME))
+    })
 }
 
 pub fn cleanup_socket() {
@@ -87,40 +90,44 @@ pub struct IpcRequest {
     pub reply_tx: mpsc::SyncSender<JsonVal>,
 }
 
-pub fn spawn_ipc_listener(ipc_tx: mpsc::Sender<IpcRequest>) {
+pub fn spawn_ipc_listener<W>(ipc_tx: mpsc::Sender<IpcRequest>, wake_main: W)
+where
+    W: Fn() + Send + 'static,
+{
     let sock = socket_path();
-    let _ = fs::remove_file(&sock);
-    let Ok(listener) = UnixListener::bind(&sock) else {
+    let _ = fs::remove_file(sock);
+    let Ok(listener) = UnixListener::bind(sock) else {
         return;
     };
 
-    thread::spawn(move || {
+    spawn_compact_thread("ff-ipc", move || {
+        let mut line = String::with_capacity(256);
         for stream in listener.incoming().flatten() {
-            let tx = ipc_tx.clone();
-            thread::spawn(move || {
-                let mut reader = BufReader::new(&stream);
-                let mut line = String::new();
-                if reader.read_line(&mut line).is_ok()
-                    && let Ok(req_json) = JsonVal::parse(&line)
-                    && let Some(cmd) = IpcCommand::from_json(&req_json)
-                {
-                    let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-                    if tx.send(IpcRequest { cmd, reply_tx }).is_ok()
-                        && let Ok(resp) = reply_rx.recv_timeout(IPC_TIMEOUT)
-                    {
+            let _ = stream.set_read_timeout(Some(IPC_TIMEOUT));
+            let _ = stream.set_write_timeout(Some(IPC_TIMEOUT));
+            line.clear();
+            let mut reader = BufReader::new(&stream);
+            if reader.read_line(&mut line).is_ok()
+                && let Ok(req_json) = JsonVal::parse(&line)
+                && let Some(cmd) = IpcCommand::from_json(&req_json)
+            {
+                let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+                if ipc_tx.send(IpcRequest { cmd, reply_tx }).is_ok() {
+                    wake_main();
+                    if let Ok(resp) = reply_rx.recv_timeout(IPC_TIMEOUT) {
                         let mut w = &stream;
                         let _ = writeln!(w, "{}", resp.to_json());
                         let _ = w.flush();
                     }
                 }
-            });
+            }
         }
     });
 }
 
 pub fn send_ipc(req: JsonVal) -> Result<JsonVal, String> {
     let sock = socket_path();
-    let mut stream = UnixStream::connect(&sock).map_err(|_| {
+    let mut stream = UnixStream::connect(sock).map_err(|_| {
         format!(
             "No running {} GUI instance found. Use `flutter_launch` or start `{}` first.",
             PKG_NAME, PKG_NAME

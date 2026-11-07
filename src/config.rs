@@ -1,3 +1,5 @@
+use std::thread;
+
 use crate::theme::{BOLD, CYAN, DIM, RESET, SUB, TEXT};
 
 pub const PKG_NAME: &str = env!("CARGO_PKG_NAME");
@@ -11,8 +13,20 @@ pub const BAR_WIDTH: usize = 28;
 pub const MIN_NAME_WIDTH: usize = 32;
 pub const BUILDING_ROWS: usize = 4;
 pub const DONE_ROWS: usize = 5;
-pub const MAX_LOG_HISTORY: usize = 500;
+pub const MAX_LOG_HISTORY: usize = 200;
 pub const DESKTOP_MIN_WIDTH: i32 = 1024;
+pub const COMPACT_STACK_SIZE: usize = 256 * 1024;
+
+/// Spawns a background worker thread with a compact 256 KiB stack instead of the 8 MiB OS default
+pub fn spawn_compact_thread<F>(name: &str, f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    let _ = thread::Builder::new()
+        .name(name.to_string())
+        .stack_size(COMPACT_STACK_SIZE)
+        .spawn(f);
+}
 
 /// Deterministic ordered device presets (zero heap allocation)
 pub const DEVICE_PRESETS: &[(&str, (i32, i32))] = &[

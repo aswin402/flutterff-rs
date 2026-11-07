@@ -1,12 +1,12 @@
+use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
-use crate::config::PORT_SCAN_RANGE;
+use crate::config::{PORT_SCAN_RANGE, spawn_compact_thread};
 use crate::mcp;
 use crate::theme::{BLUE, DIM, RED, RESET, TEXT, YELLOW, now_timestamp};
 use crate::tui::{PrettyProgress, Step};
@@ -43,8 +43,24 @@ const LEVEL_RULES: &[(&[&str], (&str, &str))] = &[
     (&["debug:"], ("DBG", DIM)),
 ];
 
-fn contains_any(haystack: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|n| haystack.contains(n))
+/// Zero-allocation case-insensitive byte search
+fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() || n.len() > h.len() {
+        return None;
+    }
+    h.windows(n.len()).position(|w| w.eq_ignore_ascii_case(n))
+}
+
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    find_ignore_ascii_case(haystack, needle).is_some()
+}
+
+fn contains_any_ignore_case(haystack: &str, needles: &[&str]) -> bool {
+    needles
+        .iter()
+        .any(|n| contains_ignore_ascii_case(haystack, n))
 }
 
 pub fn is_port_free(port: u16) -> bool {
@@ -71,18 +87,27 @@ pub fn check_online() -> bool {
         .any(|addr| TcpStream::connect_timeout(addr, Duration::from_secs(2)).is_ok())
 }
 
-/// O(n) single-pass ANSI escape sequence stripper (no regex needed)
-pub fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+/// Zero-allocation fast-path ANSI escape sequence stripper
+pub fn strip_ansi(s: &str) -> Cow<'_, str> {
+    let trimmed = s.trim();
+    if !trimmed.as_bytes().contains(&b'\x1b') {
+        return Cow::Borrowed(trimmed);
+    }
+    let mut out = String::with_capacity(trimmed.len());
     let mut in_escape = false;
-    for c in s.chars() {
+    for c in trimmed.chars() {
         match c {
             '\x1b' => in_escape = true,
             c if in_escape => in_escape = !c.is_ascii_alphabetic(),
             c => out.push(c),
         }
     }
-    out.trim().to_string()
+    let clean = out.trim();
+    if clean.len() == out.len() {
+        Cow::Owned(out)
+    } else {
+        Cow::Owned(clean.to_string())
+    }
 }
 
 /// Extracts `http://localhost:<port>...` or `http://127.0.0.1:<port>...` without regex
@@ -104,16 +129,16 @@ pub fn extract_url_port(url: &str, fallback_port: u16) -> u16 {
     url.split(':')
         .nth(2)
         .and_then(|rest| {
-            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            digits.parse::<u16>().ok()
+            let len = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+            rest.get(..len)?.parse::<u16>().ok()
         })
         .unwrap_or(fallback_port)
 }
 
-fn detect_level(lo: &str) -> (&'static str, &'static str) {
+fn detect_level(text: &str) -> (&'static str, &'static str) {
     LEVEL_RULES
         .iter()
-        .find(|&&(patterns, _)| contains_any(lo, patterns))
+        .find(|&&(patterns, _)| contains_any_ignore_case(text, patterns))
         .map(|&(_, level)| level)
         .unwrap_or(("INF", BLUE))
 }
@@ -126,30 +151,27 @@ pub enum LogSource {
 
 pub fn format_flutter_log(line: &str, source: LogSource) -> Option<String> {
     let text = strip_ansi(line);
-    if text.is_empty() {
-        return None;
-    }
-
-    let lo = text.to_lowercase();
-    if contains_any(&lo, NOISE_PATTERNS) {
+    if text.is_empty() || contains_any_ignore_case(&text, NOISE_PATTERNS) {
         return None;
     }
 
     let (tag, color, body): (&str, &str, &str) = match source {
-        _ if lo.contains("flutter:") => {
-            let idx = lo.find("flutter:")? + "flutter:".len();
+        _ if find_ignore_ascii_case(&text, "flutter:").is_some() => {
+            let idx = find_ignore_ascii_case(&text, "flutter:")? + "flutter:".len();
             let msg = text.get(idx..)?.trim();
             if msg.is_empty() {
                 return None;
             }
-            let (t, c) = detect_level(&lo[idx..]);
+            let (t, c) = detect_level(msg);
             (t, c, msg)
         }
         LogSource::WebView => {
-            let (t, c) = detect_level(&lo);
-            (t, c, text.as_str())
+            let (t, c) = detect_level(&text);
+            (t, c, text.as_ref())
         }
-        LogSource::Flutter if contains_any(&lo, ERROR_PATTERNS) => ("ERR", RED, text.as_str()),
+        LogSource::Flutter if contains_any_ignore_case(&text, ERROR_PATTERNS) => {
+            ("ERR", RED, text.as_ref())
+        }
         LogSource::Flutter => return None,
     };
 
@@ -216,21 +238,26 @@ pub fn run_flutter(
     *child_slot.lock().unwrap() = Some(child);
 
     let prog_err = progress.clone();
-    thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+    spawn_compact_thread("ff-stderr", move || {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::with_capacity(256);
+        while reader.read_line(&mut line).is_ok_and(|n| n > 0) {
             if let Some(out) = format_flutter_log(&line, LogSource::Flutter) {
                 prog_err.lock().unwrap().log_or_print(out);
             }
+            line.clear();
         }
     });
 
-    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::with_capacity(256);
+    while reader.read_line(&mut line).is_ok_and(|n| n > 0) {
         if !url_sent {
             let clean = strip_ansi(&line);
             let detected_url = extract_local_url(&clean).or_else(|| {
-                let lo = clean.to_lowercase();
-                (lo.contains("serving") || lo.contains("listening"))
-                    .then(|| format!("http://localhost:{}", port))
+                (contains_ignore_ascii_case(&clean, "serving")
+                    || contains_ignore_ascii_case(&clean, "listening"))
+                .then(|| format!("http://localhost:{}", port))
             });
 
             if let Some(url_str) = detected_url {
@@ -250,6 +277,7 @@ pub fn run_flutter(
         if let Some(out) = format_flutter_log(&line, LogSource::Flutter) {
             progress.lock().unwrap().log_or_print(out);
         }
+        line.clear();
     }
 
     if !url_sent {
