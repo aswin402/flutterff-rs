@@ -23,6 +23,25 @@ use schema::{
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const LAUNCH_POLL_ATTEMPTS: usize = 20;
 const LAUNCH_POLL_INTERVAL: Duration = Duration::from_millis(150);
+const MCP_PENDING_ENV: &str = "FLUTTERFF_MCP_PENDING_LINE";
+const MCP_INSTRUCTIONS: &str = "flutterff-rs v2.5.6 provides 20 native GTK/WebKit2GTK tools for Flutter Web and universal web/browser automation. Use flutter_launch(project_dir) for Flutter projects or flutter_launch(url) for instant (~80ms) web app / browser mode. Prefer flutter_ui_tree(diff: true) after actions or flutter_ui_tree(query, role) to minimize token usage, and flutter_screenshot(annotated: true) for Set-of-Mark visual grounding ([0], [1], ... badges). Action tools (flutter_tap, flutter_type, flutter_fill_form) automatically bundle a post-action ui_diff.";
+
+fn maybe_reexec_updated_binary(current_line: &str) {
+    #[cfg(target_os = "linux")]
+    if let Ok(exe) = fs::read_link("/proc/self/exe") {
+        let s = exe.to_string_lossy();
+        if let Some(clean_path) = s.strip_suffix(" (deleted)")
+            && std::path::Path::new(clean_path).exists()
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: Single-threaded MCP stdio server right before exec().
+            unsafe {
+                env::set_var(MCP_PENDING_ENV, current_line);
+            }
+            let _ = Command::new(clean_path).arg("--mcp").exec();
+        }
+    }
+}
 
 pub fn run_mcp_server() {
     let stdin = std::io::stdin();
@@ -30,54 +49,64 @@ pub fn run_mcp_server() {
     let mut stdout = std::io::stdout();
     let mut line = String::with_capacity(512);
 
+    if let Ok(pending) = env::var(MCP_PENDING_ENV) {
+        // SAFETY: Single-threaded MCP stdio server at startup.
+        unsafe {
+            env::remove_var(MCP_PENDING_ENV);
+        }
+        process_mcp_line(&pending, &mut stdout);
+    }
+
     while handle.read_line(&mut line).is_ok_and(|n| n > 0) {
         let trimmed = line.trim();
-        if trimmed.is_empty() {
-            line.clear();
-            continue;
+        if !trimmed.is_empty() {
+            maybe_reexec_updated_binary(trimmed);
+            process_mcp_line(trimmed, &mut stdout);
         }
-        let Ok(msg) = JsonVal::parse(trimmed) else {
-            line.clear();
-            continue;
-        };
-
-        let Some(req_id) = msg.get("id").cloned() else {
-            line.clear();
-            continue;
-        };
-        let method = msg.get("method").and_then(JsonVal::as_str).unwrap_or("");
-        let params = msg.get("params").cloned().unwrap_or(JsonVal::Null);
-
-        let response = match method {
-            "initialize" => rpc_ok(
-                req_id,
-                j_obj([
-                    ("protocolVersion", j_str(MCP_PROTOCOL_VERSION)),
-                    (
-                        "capabilities",
-                        j_obj([
-                            ("tools", j_obj([("listChanged", j_bool(false))])),
-                            ("resources", j_obj([("listChanged", j_bool(false))])),
-                        ]),
-                    ),
-                    (
-                        "serverInfo",
-                        j_obj([("name", j_str(PKG_NAME)), ("version", j_str(VERSION))]),
-                    ),
-                ]),
-            ),
-            "ping" => rpc_ok(req_id, j_obj([])),
-            "tools/list" => rpc_ok(req_id, j_obj([("tools", build_tools_schema())])),
-            "tools/call" => handle_tool_call(req_id, &params),
-            "resources/list" => rpc_ok(req_id, j_obj([("resources", build_resources_schema())])),
-            "resources/read" => handle_resource_read(req_id, &params),
-            other => rpc_err(req_id, -32601, &format!("Method not found: {}", other)),
-        };
-
-        let _ = writeln!(stdout, "{}", response.to_json());
-        let _ = stdout.flush();
         line.clear();
     }
+}
+
+fn process_mcp_line(trimmed: &str, stdout: &mut std::io::Stdout) {
+    let Ok(msg) = JsonVal::parse(trimmed) else {
+        return;
+    };
+
+    let Some(req_id) = msg.get("id").cloned() else {
+        return;
+    };
+    let method = msg.get("method").and_then(JsonVal::as_str).unwrap_or("");
+    let params = msg.get("params").cloned().unwrap_or(JsonVal::Null);
+
+    let response = match method {
+        "initialize" => rpc_ok(
+            req_id,
+            j_obj([
+                ("protocolVersion", j_str(MCP_PROTOCOL_VERSION)),
+                (
+                    "capabilities",
+                    j_obj([
+                        ("tools", j_obj([("listChanged", j_bool(false))])),
+                        ("resources", j_obj([("listChanged", j_bool(false))])),
+                    ]),
+                ),
+                (
+                    "serverInfo",
+                    j_obj([("name", j_str(PKG_NAME)), ("version", j_str(VERSION))]),
+                ),
+                ("instructions", j_str(MCP_INSTRUCTIONS)),
+            ]),
+        ),
+        "ping" => rpc_ok(req_id, j_obj([])),
+        "tools/list" => rpc_ok(req_id, j_obj([("tools", build_tools_schema())])),
+        "tools/call" => handle_tool_call(req_id, &params),
+        "resources/list" => rpc_ok(req_id, j_obj([("resources", build_resources_schema())])),
+        "resources/read" => handle_resource_read(req_id, &params),
+        other => rpc_err(req_id, -32601, &format!("Method not found: {}", other)),
+    };
+
+    let _ = writeln!(stdout, "{}", response.to_json());
+    let _ = stdout.flush();
 }
 
 fn rpc_ok(id: JsonVal, result: JsonVal) -> JsonVal {
