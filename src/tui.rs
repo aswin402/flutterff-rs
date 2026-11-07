@@ -54,6 +54,7 @@ pub struct PrettyProgress {
     pub error_msg: Option<String>,
     pub queued_logs: Vec<String>,
     pub log_history: VecDeque<String>,
+    pub overflow_errors: VecDeque<String>,
 }
 
 impl PrettyProgress {
@@ -81,6 +82,7 @@ impl PrettyProgress {
             error_msg: None,
             queued_logs: Vec::new(),
             log_history: VecDeque::with_capacity(MAX_LOG_HISTORY),
+            overflow_errors: VecDeque::with_capacity(32),
         }
     }
 
@@ -112,7 +114,15 @@ impl PrettyProgress {
     }
 
     pub fn log_or_print(&mut self, formatted: String) {
-        self.push_history(strip_ansi(&formatted).into_owned());
+        let plain = strip_ansi(&formatted).into_owned();
+        if plain.contains(" OVR ") {
+            if self.overflow_errors.len() >= 32 {
+                self.overflow_errors.pop_front();
+            }
+            self.overflow_errors
+                .push_back(format!("[{}x{}] {}", self.width, self.height, plain));
+        }
+        self.push_history(plain);
         if self.tui_finished {
             println!("{}", formatted);
         } else {
@@ -337,6 +347,10 @@ pub fn spawn_pretty_tui(progress: Arc<Mutex<PrettyProgress>>, started: Instant) 
                 RESET,
                 SUB,
                 mcp::socket_path().display()
+            );
+            println!(
+                "{}  {:<15}{}{}Ctrl+R reload · Ctrl+S shot · Ctrl+I inspect · Ctrl+L rotate{}",
+                DIM, "shortcuts", RESET, SUB, RESET
             );
             println!("{}{}{}", DIM, sep, RESET);
         } else {

@@ -187,7 +187,13 @@ fn handle_tool_call(req_id: JsonVal, params: &JsonVal) -> JsonVal {
             ),
         },
         "flutter_launch" => handle_launch_tool(&args),
-        "flutter_hot_reload" => forward_ipc_action("hot_reload", vec![]),
+        "flutter_hot_reload" => {
+            if let Some(enabled) = args.get("auto_watch").and_then(JsonVal::as_bool) {
+                forward_ipc_action("toggle_watch", vec![("enabled", j_bool(enabled))])
+            } else {
+                forward_ipc_action("hot_reload", vec![])
+            }
+        }
         "flutter_hot_restart" => forward_ipc_action("hot_restart", vec![]),
         "flutter_stop" => forward_ipc_action("stop", vec![]),
         "flutter_resize" => {
@@ -197,6 +203,7 @@ fn handle_tool_call(req_id: JsonVal, params: &JsonVal) -> JsonVal {
                 .unwrap_or(DEFAULT_PRESET);
             forward_ipc_action("resize", vec![("size", j_str(size))])
         }
+        "flutter_responsive_audit" => handle_responsive_audit(),
         "flutter_screenshot" => {
             let include_img = args
                 .get("include_image")
@@ -288,10 +295,17 @@ fn handle_launch_tool(args: &JsonVal) -> JsonVal {
     if let Some(port) = args.get("port").and_then(JsonVal::as_u64) {
         cmd.args(["--port", &port.to_string()]);
     }
-    for (key, flag) in [("offline", "--offline"), ("profile", "--profile")] {
+    for (key, flag) in [
+        ("offline", "--offline"),
+        ("profile", "--profile"),
+        ("landscape", "--landscape"),
+    ] {
         if args.get(key).and_then(JsonVal::as_bool).unwrap_or(false) {
             cmd.arg(flag);
         }
+    }
+    if args.get("watch").and_then(JsonVal::as_bool) == Some(false) {
+        cmd.arg("--no-watch");
     }
 
     cmd.stdin(Stdio::null())
@@ -319,4 +333,60 @@ fn handle_launch_tool(args: &JsonVal) -> JsonVal {
         }
         Err(e) => tool_text_result(format!("Failed to launch {}: {}", PKG_NAME, e), true),
     }
+}
+
+fn handle_responsive_audit() -> JsonVal {
+    let orig = match send_ipc(j_obj([("action", j_str("status"))])) {
+        Ok(s) => s,
+        Err(e) => return tool_text_result(e, true),
+    };
+    let orig_w = orig.get("width").and_then(JsonVal::as_u64).unwrap_or(412);
+    let orig_h = orig.get("height").and_then(JsonVal::as_u64).unwrap_or(915);
+
+    let mut results = Vec::with_capacity(DEVICE_PRESETS.len());
+    let mut total_overflows = 0u64;
+
+    for &(preset, (w, h)) in DEVICE_PRESETS {
+        let _ = send_ipc(j_obj([
+            ("action", j_str("resize")),
+            ("size", j_str(preset)),
+        ]));
+        thread::sleep(Duration::from_millis(140));
+        let tree = send_ipc(j_obj([("action", j_str("ui_tree"))])).unwrap_or(JsonVal::Null);
+        let status = send_ipc(j_obj([("action", j_str("status"))])).unwrap_or(JsonVal::Null);
+        let dom_ovr = tree
+            .get("overflow_count")
+            .and_then(JsonVal::as_u64)
+            .unwrap_or(0);
+        let flt_ovr = status
+            .get("overflow_count")
+            .and_then(JsonVal::as_u64)
+            .unwrap_or(0);
+        let count = tree.get("count").and_then(JsonVal::as_u64).unwrap_or(0);
+        total_overflows += dom_ovr;
+        results.push(j_obj([
+            ("preset", j_str(preset)),
+            ("width", j_num(w)),
+            ("height", j_num(h)),
+            ("elements", j_num(count as f64)),
+            ("dom_overflows", j_num(dom_ovr as f64)),
+            ("renderflex_overflows", j_num(flt_ovr as f64)),
+            ("pass", j_bool(dom_ovr == 0 && flt_ovr == 0)),
+        ]));
+    }
+
+    let _ = send_ipc(j_obj([
+        ("action", j_str("resize")),
+        ("size", j_str(format!("{}x{}", orig_w, orig_h))),
+    ]));
+
+    tool_text_result(
+        j_obj([
+            ("ok", j_bool(true)),
+            ("all_passed", j_bool(total_overflows == 0)),
+            ("results", j_arr(results)),
+        ])
+        .to_json(),
+        false,
+    )
 }

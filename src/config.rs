@@ -45,6 +45,10 @@ pub fn pointer_mode_for_width(w: i32) -> &'static str {
     }
 }
 
+pub fn orientation_for_dims(w: i32, h: i32) -> &'static str {
+    if w > h { "landscape" } else { "portrait" }
+}
+
 pub fn find_preset(name: &str) -> Option<(i32, i32)> {
     DEVICE_PRESETS
         .iter()
@@ -88,6 +92,8 @@ pub enum CliAction {
 pub struct CliConfig {
     pub port: u16,
     pub no_hot: bool,
+    pub watch: bool,
+    pub landscape: bool,
     pub profile: bool,
     pub offline: bool,
     pub flavor: Option<String>,
@@ -99,6 +105,8 @@ impl CliConfig {
         let mut cfg = Self {
             port: DEFAULT_PORT,
             no_hot: false,
+            watch: true,
+            landscape: false,
             profile: false,
             offline: false,
             flavor: None,
@@ -124,7 +132,12 @@ impl CliConfig {
                 "--version" | "-V" => return Ok(CliAction::ShowVersion),
                 "--help" | "-h" => return Ok(CliAction::ShowHelp),
                 "--list-sizes" => return Ok(CliAction::ListSizes),
-                "--no-hot" => cfg.no_hot = true,
+                "--no-hot" => {
+                    cfg.no_hot = true;
+                    cfg.watch = false;
+                }
+                "--no-watch" => cfg.watch = false,
+                "--landscape" | "-l" => cfg.landscape = true,
                 "--profile" => cfg.profile = true,
                 "--offline" => cfg.offline = true,
                 "--port" | "-p" => {
@@ -162,6 +175,10 @@ pub fn print_help() {
             "Viewport size preset or custom WxH (default: mobile)",
         ),
         (
+            "-l, --landscape",
+            "Start the viewport in landscape orientation (swaps WxH)",
+        ),
+        (
             "-p, --port <PORT>",
             "Web-server HTTP port (default: 8080, auto-increments)",
         ),
@@ -171,6 +188,10 @@ pub fn print_help() {
         ),
         ("    --profile", "Run Flutter in profile mode"),
         ("    --flavor <NAME>", "Build a custom Flutter app flavor"),
+        (
+            "    --no-watch",
+            "Disable inotify auto-reload on lib/*.dart save",
+        ),
         ("    --no-hot", "Disable hot reload support"),
         ("    --list-sizes", "Display all built-in device presets"),
         ("-V, --version", "Print version information"),
@@ -178,6 +199,22 @@ pub fn print_help() {
     ];
     for (flag, desc) in opts {
         println!("  {}{:<26}{} {}{}{}", CYAN, flag, RESET, TEXT, desc, RESET);
+    }
+    println!("\n{}WINDOW SHORTCUTS:{}", BOLD, RESET);
+    let keys = [
+        ("Ctrl+R / F5", "Instant Hot Reload"),
+        ("Ctrl+Shift+R", "Crash-safe WebView Hot Restart"),
+        ("Ctrl+S", "Capture PNG Screenshot (screenshots/)"),
+        (
+            "Ctrl+I / F12",
+            "Toggle UI Semantics Inspector ([0], [1]...)",
+        ),
+        ("Ctrl+L", "Rotate Portrait <-> Landscape"),
+        ("Ctrl+W", "Toggle Auto-Reload Watcher (lib/*.dart)"),
+        ("Ctrl+Q", "Quit simulator and Flutter daemon"),
+    ];
+    for (k, desc) in keys {
+        println!("  {}{:<26}{} {}{}{}", CYAN, k, RESET, TEXT, desc, RESET);
     }
     println!();
 }

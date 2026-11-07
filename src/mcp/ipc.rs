@@ -33,6 +33,9 @@ pub enum IpcCommand {
     Status,
     HotReload,
     HotRestart,
+    ToggleWatch {
+        enabled: Option<bool>,
+    },
     Resize {
         size: String,
     },
@@ -60,6 +63,9 @@ impl IpcCommand {
             "status" => Some(Self::Status),
             "hot_reload" => Some(Self::HotReload),
             "hot_restart" => Some(Self::HotRestart),
+            "toggle_watch" => Some(Self::ToggleWatch {
+                enabled: req.get("enabled").and_then(JsonVal::as_bool),
+            }),
             "resize" => Some(Self::Resize {
                 size: req
                     .get("size")

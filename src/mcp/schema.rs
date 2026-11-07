@@ -66,12 +66,29 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
                 desc: "Custom Flutter build flavor.",
                 required: false,
             },
+            ToolParamSpec {
+                name: "landscape",
+                kind: "boolean",
+                desc: "Launch in landscape orientation (swaps width and height).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "watch",
+                kind: "boolean",
+                desc: "Enable automatic inotify Hot Reload when lib/*.dart files are saved (default: true).",
+                required: false,
+            },
         ],
     },
     ToolSpec {
         name: "flutter_hot_reload",
-        desc: "Trigger an instant Hot Reload ('r') in the running flutterff-rs session.",
-        params: &[],
+        desc: "Trigger an instant Hot Reload ('r') in the running flutterff-rs session, or toggle the automatic inotify .dart file-save watcher via 'auto_watch'.",
+        params: &[ToolParamSpec {
+            name: "auto_watch",
+            kind: "boolean",
+            desc: "Optional: enable (true) or pause (false) automatic inotify Hot Reload on lib/*.dart save.",
+            required: false,
+        }],
     },
     ToolSpec {
         name: "flutter_hot_restart",
@@ -80,13 +97,18 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "flutter_resize",
-        desc: "Resize the running flutterff-rs simulator window to a preset (mobile, mobile-small, iphone, tablet, desktop) or custom WxH (e.g. 390x844).",
+        desc: "Resize or rotate the running flutterff-rs simulator window. Pass a preset (mobile, mobile-small, iphone, tablet, desktop), custom WxH (e.g. 390x844), or 'rotate' / 'landscape' / 'portrait'.",
         params: &[ToolParamSpec {
             name: "size",
             kind: "string",
-            desc: "Preset name or WxH dimensions.",
+            desc: "Preset name, WxH dimensions, or 'rotate' / 'landscape' / 'portrait'.",
             required: true,
         }],
+    },
+    ToolSpec {
+        name: "flutter_responsive_audit",
+        desc: "Automatically step through all 5 viewport presets (mobile-small, iphone, mobile, tablet, desktop), check for Flutter RenderFlex overflow errors and horizontally clipped interactive widgets at each size, and restore the original viewport.",
+        params: &[],
     },
     ToolSpec {
         name: "flutter_screenshot",

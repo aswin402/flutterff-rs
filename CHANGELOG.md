@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [2.5.5] - 2026-11-08
+
+### ✨ Added
+- **Zero-Overhead Linux `inotify` Auto Hot Reload (`src/watcher.rs`)**:
+  - Recursively watches `lib/**/*.dart` using raw Linux `inotify_init1`/`inotify_add_watch` syscalls (`0.00%` idle CPU, `0 KB` extra crates) with a `250ms` debounce window (`DEBOUNCE_WINDOW`) and automatically triggers `r\n` Hot Reload whenever a `.dart` file is saved.
+  - Wired across **CLI** (`--no-watch` flag), **GUI** (`emblem-synchronizing-symbolic` HeaderBar toggle button + `Ctrl+W` shortcut), and **MCP** (`flutter_launch(watch: ...)` + `flutter_hot_reload(auto_watch: true/false)` + `auto_watch` field in `flutter_status`).
+- **Automatic Flutter Layout Overflow Detector & Multi-Preset Auditor (`flutter_responsive_audit`)**:
+  - **Runtime Log & Status Tracking**: Detects `"RenderFlex overflowed"` and `"overflowed by"` warnings in `src/flutter.rs`, tags them as `OVR` in Coral Rose (`#F38BA8`), and records them in `PrettyProgress::overflow_errors` (exposed in `flutter_status` as `overflow_count` and `overflows`).
+  - **Visual & DOM Overflow Inspector (`src/agent_bridge.js`)**: Automatically flags interactive widgets clipped beyond the horizontal viewport or container with `[OVERFLOW]` badges in `flutter_ui_tree` and renders red (`#F38BA8`) dashed bounding boxes (`.__ff_box_overflow`) in the Set-of-Mark overlay.
+  - **New MCP Tool (`flutter_responsive_audit`)**: Steps through all 5 viewport presets (`mobile-small`, `iphone`, `mobile`, `tablet`, `desktop`), inspects each layout for Flutter `RenderFlex` overflows and horizontally clipped widgets, restores the original viewport, and returns a complete JSON report.
+- **1-Click Portrait ↔ Landscape Orientation Rotation**:
+  - Swaps viewport width and height (`412×915` ↔ `915×412`) and updates `orientation` (`"portrait"`, `"landscape"`, `"square"`) and adaptive `pointer_mode` automatically.
+  - Wired across **CLI** (`-l` / `--landscape`), **GUI** (`object-rotate-right-symbolic` HeaderBar button + `Ctrl+L`), and **MCP** (`flutter_launch(landscape: true)` and `flutter_resize(size: "rotate" | "landscape" | "portrait")`).
+- **Window Keyboard Accelerators (`window.connect_key_press_event`)**:
+  - Added desktop keyboard shortcuts directly inside the GTK3 simulator window: `Ctrl+R` / `F5` (Hot Reload), `Ctrl+Shift+R` (Hot Restart), `Ctrl+S` (Screenshot), `Ctrl+I` / `F12` (Toggle UI Inspector), `Ctrl+L` (Rotate Orientation), `Ctrl+W` (Toggle Auto-Watch), and `Ctrl+Q` (Quit).
+
+---
+
 ## [2.5.4] - 2026-11-08
 
 ### ✨ Added

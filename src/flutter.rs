@@ -31,10 +31,20 @@ const NOISE_PATTERNS: &[&str] = &[
 ];
 
 /// Fatal/error substrings emitted directly by Flutter tool stdout/stderr
-const ERROR_PATTERNS: &[&str] = &["error:", "exception:", "fatal:", "unhandled", "══╡", "══╞"];
+const ERROR_PATTERNS: &[&str] = &[
+    "renderflex overflowed",
+    "overflowed by",
+    "error:",
+    "exception:",
+    "fatal:",
+    "unhandled",
+    "══╡",
+    "══╞",
+];
 
 /// Table-driven log level rules evaluated in priority order
 const LEVEL_RULES: &[(&[&str], (&str, &str))] = &[
+    (&["renderflex overflowed", "overflowed by"], ("OVR", RED)),
     (
         &["error:", "exception:", "fatal:", "unhandled"],
         ("ERR", RED),
@@ -170,7 +180,10 @@ pub fn format_flutter_log(line: &str, source: LogSource) -> Option<String> {
             (t, c, text.as_ref())
         }
         LogSource::Flutter if contains_any_ignore_case(&text, ERROR_PATTERNS) => {
-            ("ERR", RED, text.as_ref())
+            let (t, c) = detect_level(&text);
+            let tag = if t == "OVR" { "OVR" } else { "ERR" };
+            let col = if t == "OVR" { RED } else { c };
+            (tag, col, text.as_ref())
         }
         LogSource::Flutter => return None,
     };

@@ -152,8 +152,10 @@
         ".__ff_touch_dot { position: absolute; top: 0; left: 0; width: 12px; height: 12px; margin-left: -6px; margin-top: -6px; border-radius: 50%; background: #FF4500; box-shadow: 0 1px 4px rgba(255, 69, 0, 0.55); pointer-events: none; transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease; opacity: 0; }",
         ".__ff_box { position: absolute; border: 1.5px dashed #00E5FF; background: rgba(0, 229, 255, 0.06); border-radius: 4px; pointer-events: none; box-sizing: border-box; }",
         ".__ff_box_input { border-color: #50FA7B; background: rgba(80, 250, 123, 0.06); }",
+        ".__ff_box_overflow { border-color: #F38BA8; background: rgba(243, 139, 168, 0.14); }",
         ".__ff_badge { position: absolute; top: -1px; left: -1px; background: #1E1E2E; color: #00E5FF; border: 1px solid #00E5FF; border-radius: 3px; padding: 0 4px; font-size: 10px; font-weight: 700; line-height: 14px; white-space: nowrap; }",
-        ".__ff_box_input .__ff_badge { color: #50FA7B; border-color: #50FA7B; }"
+        ".__ff_box_input .__ff_badge { color: #50FA7B; border-color: #50FA7B; }",
+        ".__ff_box_overflow .__ff_badge { color: #F38BA8; border-color: #F38BA8; }"
       ].join("\n");
       document.head.appendChild(style);
     }
@@ -405,6 +407,7 @@
       seenKeys[dedupKey] = true;
 
       var idx = items.length;
+      var isOverflow = rect.right > window.innerWidth + 2 || rect.left < -2;
       items.push({
         index: idx,
         role: info.role,
@@ -412,6 +415,7 @@
         value: info.value,
         interactive: info.interactive,
         isInput: info.isInput,
+        overflow: isOverflow,
         x: rx,
         y: ry,
         width: rw,
@@ -439,7 +443,10 @@
     for (var i = 0; i < state.selectorMap.length; i++) {
       var item = state.selectorMap[i];
       var box = document.createElement("div");
-      box.className = "__ff_box" + (item.isInput ? " __ff_box_input" : "");
+      box.className =
+        "__ff_box" +
+        (item.isInput ? " __ff_box_input" : "") +
+        (item.overflow ? " __ff_box_overflow" : "");
       box.style.left = item.x + "px";
       box.style.top = item.y + "px";
       box.style.width = item.width + "px";
@@ -448,7 +455,8 @@
       var badge = document.createElement("div");
       badge.className = "__ff_badge";
       var shortRole = item.role === "textfield" ? "input" : item.role;
-      badge.textContent = "[" + item.index + "] " + shortRole;
+      badge.textContent =
+        "[" + item.index + "] " + shortRole + (item.overflow ? " OVERFLOW" : "");
       box.appendChild(badge);
       state.boxesEl.appendChild(box);
     }
@@ -457,6 +465,10 @@
   function formatUiTreeText(items, semActive, maxChars) {
     var budget = typeof maxChars === "number" && maxChars > 0 ? maxChars : 4000;
     var mode = effectivePointerMode();
+    var overflowCount = 0;
+    for (var k = 0; k < items.length; k++) {
+      if (items[k].overflow) overflowCount++;
+    }
     var header =
       "Viewport: " +
       window.innerWidth +
@@ -468,7 +480,8 @@
       " | Semantics: " +
       (semActive ? "active" : "dom-only") +
       " | Elements: " +
-      items.length;
+      items.length +
+      (overflowCount > 0 ? " | Overflows: " + overflowCount : "");
 
     if (items.length === 0) {
       return (
@@ -482,6 +495,7 @@
       var it = items[i];
       var lbl = it.label ? ' "' + collapseWhitespace(it.label) + '"' : "";
       var val = it.value ? ' val="' + it.value + '"' : "";
+      var ovr = it.overflow ? " [OVERFLOW]" : "";
       lines.push(
         "[" +
           it.index +
@@ -497,7 +511,8 @@
           ") " +
           it.width +
           "x" +
-          it.height
+          it.height +
+          ovr
       );
     }
     var out = lines.join("\n");
@@ -747,12 +762,15 @@
         }
         var items = buildUiTree(Boolean(payload.include_static));
         renderInspectorBoxes();
+        var overflowCount = 0;
         var cleanItems = items.map(function (it) {
+          if (it.overflow) overflowCount++;
           return {
             index: it.index,
             role: it.role,
             label: it.label,
             value: it.value,
+            overflow: it.overflow,
             x: it.x,
             y: it.y,
             width: it.width,
@@ -766,6 +784,7 @@
           pointer_mode: effectivePointerMode(),
           semantics_active: semActive,
           count: cleanItems.length,
+          overflow_count: overflowCount,
           summary: formatUiTreeText(items, semActive, payload.max_chars),
           elements: cleanItems
         });

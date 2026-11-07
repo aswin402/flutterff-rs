@@ -4,11 +4,13 @@ mod mcp;
 mod screenshot;
 mod theme;
 mod tui;
+mod watcher;
 
 use std::cell::RefCell;
 use std::env;
 use std::io::Write;
 use std::process::{Child, ChildStdin};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -22,15 +24,16 @@ use webkit2gtk::{
 };
 
 use config::{
-    CliAction, CliConfig, DEVICE_PRESETS, PKG_NAME, VERSION, pointer_mode_for_width, print_help,
-    print_size_presets, resolve_dimensions, spawn_compact_thread,
+    CliAction, CliConfig, DEVICE_PRESETS, PKG_NAME, VERSION, orientation_for_dims,
+    pointer_mode_for_width, print_help, print_size_presets, resolve_dimensions,
+    spawn_compact_thread,
 };
 use flutter::{
     LogSource, check_online, find_free_port, format_flutter_log, is_port_free, run_flutter,
 };
-use mcp::{IpcCommand, IpcRequest, j_bool, j_num, j_obj, j_str};
+use mcp::{IpcCommand, IpcRequest, j_arr, j_bool, j_num, j_obj, j_str};
 use screenshot::{capture_screenshot_surface, take_screenshot};
-use theme::{CYAN, RED, RESET, SUB, print_tagged_event};
+use theme::{CYAN, GREEN, RED, RESET, SUB, YELLOW, print_tagged_event};
 use tui::{PrettyProgress, Step, spawn_pretty_tui};
 
 const AGENT_BRIDGE_JS: &str = include_str!("agent_bridge.js");
@@ -97,6 +100,32 @@ fn sync_webview_pointer_mode(webview: &WebView, w: i32) {
     webview.run_javascript(&js, gtk::gio::Cancellable::NONE, |_| {});
 }
 
+fn apply_window_resize(
+    win: &gtk::Window,
+    wv: &WebView,
+    prog: &Arc<Mutex<PrettyProgress>>,
+    w: i32,
+    h: i32,
+    label: &str,
+    suffix: &str,
+) {
+    {
+        let mut pr = prog.lock().unwrap();
+        pr.width = w;
+        pr.height = h;
+        pr.window_label = format!("{}×{} ({})", w, h, label);
+    }
+    win.resize(w, h);
+    wv.queue_resize();
+    wv.queue_draw();
+    sync_webview_pointer_mode(wv, w);
+    print_tagged_event(
+        "WIN",
+        CYAN,
+        &format!("{} {}({}×{}{}){}", label, SUB, w, h, suffix, RESET),
+    );
+}
+
 fn main() {
     tune_allocator_env();
     let started = Instant::now();
@@ -125,13 +154,17 @@ fn main() {
         }
     };
 
-    let (width, height, size_label) = match resolve_dimensions(&cfg.size_str) {
+    let (mut width, mut height, mut size_label) = match resolve_dimensions(&cfg.size_str) {
         Ok(res) => res,
         Err(e) => {
             eprintln!("{}{}{}", RED, e, RESET);
             std::process::exit(1);
         }
     };
+    if cfg.landscape && height > width {
+        std::mem::swap(&mut width, &mut height);
+        size_label = format!("{}-landscape", size_label);
+    }
 
     if !is_port_free(cfg.port) {
         cfg.port = find_free_port(cfg.port.saturating_add(1));
@@ -273,20 +306,7 @@ fn main() {
         let wv = webview.clone();
         let prog_win = progress.clone();
         item.connect_activate(move |_| {
-            {
-                let mut pr = prog_win.lock().unwrap();
-                pr.width = w;
-                pr.height = h;
-                pr.window_label = format!("{}×{} ({})", w, h, name);
-            }
-            print_tagged_event(
-                "WIN",
-                CYAN,
-                &format!("{} {}({}×{}){}", name, SUB, w, h, RESET),
-            );
-            win.resize(w, h);
-            wv.queue_resize();
-            sync_webview_pointer_mode(&wv, w);
+            apply_window_resize(&win, &wv, &prog_win, w, h, name, "");
             let wv_clone = wv.clone();
             glib::timeout_add_local(Duration::from_millis(100), move || {
                 wv_clone.queue_draw();
@@ -299,12 +319,33 @@ fn main() {
     size_btn.set_popup(Some(&menu));
     hb.pack_start(&size_btn);
 
+    let rotate_btn = gtk::Button::new();
+    rotate_btn.set_image(Some(&gtk::Image::from_icon_name(
+        Some("object-rotate-right-symbolic"),
+        gtk::IconSize::Menu,
+    )));
+    rotate_btn.set_tooltip_text(Some("Rotate Portrait <-> Landscape (Ctrl+L)"));
+    {
+        let win_rot = window.clone();
+        let wv_rot = webview.clone();
+        let prog_rot = progress.clone();
+        rotate_btn.connect_clicked(move |_| {
+            let (new_w, new_h) = {
+                let pr = prog_rot.lock().unwrap();
+                (pr.height, pr.width)
+            };
+            let orient = orientation_for_dims(new_w, new_h);
+            apply_window_resize(&win_rot, &wv_rot, &prog_rot, new_w, new_h, orient, "");
+        });
+    }
+    hb.pack_start(&rotate_btn);
+
     let shot_btn = gtk::Button::new();
     shot_btn.set_image(Some(&gtk::Image::from_icon_name(
         Some("camera-photo-symbolic"),
         gtk::IconSize::Menu,
     )));
-    shot_btn.set_tooltip_text(Some("Screenshot (screenshots/)"));
+    shot_btn.set_tooltip_text(Some("Screenshot (Ctrl+S)"));
     let wv_shot = webview.clone();
     shot_btn.connect_clicked(move |_| {
         take_screenshot(&wv_shot);
@@ -316,7 +357,7 @@ fn main() {
         Some("find-location-symbolic"),
         gtk::IconSize::Menu,
     )));
-    inspect_btn.set_tooltip_text(Some("Toggle UI Inspector Overlay ([0], [1]...)"));
+    inspect_btn.set_tooltip_text(Some("Toggle UI Inspector Overlay (Ctrl+I / F12)"));
     let wv_inspect = webview.clone();
     inspect_btn.connect_clicked(move |_| {
         wv_inspect.run_javascript(
@@ -328,8 +369,33 @@ fn main() {
     });
     hb.pack_start(&inspect_btn);
 
+    let watch_enabled = Arc::new(AtomicBool::new(cfg.watch));
+    let watch_btn = gtk::Button::new();
+    watch_btn.set_image(Some(&gtk::Image::from_icon_name(
+        Some("emblem-synchronizing-symbolic"),
+        gtk::IconSize::Menu,
+    )));
+    watch_btn.set_tooltip_text(Some("Toggle Auto-Reload on .dart Save (Ctrl+W)"));
+    {
+        let w_flag = watch_enabled.clone();
+        watch_btn.connect_clicked(move |_| {
+            let next = !w_flag.load(Ordering::Relaxed);
+            w_flag.store(next, Ordering::Relaxed);
+            print_tagged_event(
+                "WCH",
+                if next { GREEN } else { YELLOW },
+                if next {
+                    "auto-reload watcher enabled (lib/*.dart)"
+                } else {
+                    "auto-reload watcher paused"
+                },
+            );
+        });
+    }
+    hb.pack_start(&watch_btn);
+
     let reload_btn = gtk::Button::with_label("🗲");
-    reload_btn.set_tooltip_text(Some("Hot Reload (r)"));
+    reload_btn.set_tooltip_text(Some("Hot Reload (Ctrl+R / F5)"));
     hb.pack_end(&reload_btn);
 
     let restart_btn = gtk::Button::new();
@@ -337,7 +403,7 @@ fn main() {
         Some("view-refresh-symbolic"),
         gtk::IconSize::Menu,
     )));
-    restart_btn.set_tooltip_text(Some("Hot Restart (R)"));
+    restart_btn.set_tooltip_text(Some("Hot Restart (Ctrl+Shift+R)"));
     hb.pack_end(&restart_btn);
 
     let vbox = GtkBox::new(gtk::Orientation::Vertical, 0);
@@ -380,6 +446,67 @@ fn main() {
         });
     }
 
+    // Window keyboard accelerators (Ctrl+R/F5, Ctrl+Shift+R, Ctrl+S, Ctrl+I/F12, Ctrl+L, Ctrl+W, Ctrl+Q)
+    {
+        let reload_k = reload_btn.clone();
+        let restart_k = restart_btn.clone();
+        let shot_k = shot_btn.clone();
+        let inspect_k = inspect_btn.clone();
+        let rotate_k = rotate_btn.clone();
+        let watch_k = watch_btn.clone();
+        window.connect_key_press_event(move |win, ev| {
+            let state = ev.state();
+            let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            let kv = ev.keyval();
+
+            if kv == gtk::gdk::keys::constants::F5 {
+                reload_k.clicked();
+                return glib::Propagation::Stop;
+            }
+            if kv == gtk::gdk::keys::constants::F12 {
+                inspect_k.clicked();
+                return glib::Propagation::Stop;
+            }
+            if ctrl {
+                if let Some(ch) = kv.to_unicode().map(|c| c.to_ascii_lowercase()) {
+                    match ch {
+                        'r' if shift => {
+                            restart_k.clicked();
+                            return glib::Propagation::Stop;
+                        }
+                        'r' => {
+                            reload_k.clicked();
+                            return glib::Propagation::Stop;
+                        }
+                        's' => {
+                            shot_k.clicked();
+                            return glib::Propagation::Stop;
+                        }
+                        'i' => {
+                            inspect_k.clicked();
+                            return glib::Propagation::Stop;
+                        }
+                        'l' => {
+                            rotate_k.clicked();
+                            return glib::Propagation::Stop;
+                        }
+                        'w' => {
+                            watch_k.clicked();
+                            return glib::Propagation::Stop;
+                        }
+                        'q' => {
+                            win.close();
+                            return glib::Propagation::Stop;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            glib::Propagation::Proceed
+        });
+    }
+
     // Graceful daemon quit ('q\n') + socket cleanup on window close
     let child_destroy = child_slot.clone();
     let stdin_destroy = stdin_slot.clone();
@@ -399,6 +526,7 @@ fn main() {
     });
 
     window.show_all();
+    watcher::spawn_dart_watcher(watch_enabled.clone(), stdin_slot.clone());
 
     progress.lock().unwrap().finish_step(
         Step::GtkShell,
@@ -416,6 +544,7 @@ fn main() {
         let prog_ipc = progress.clone();
         let pending_ipc = pending_js_replies.clone();
         let next_id_ipc = next_js_req_id.clone();
+        let watch_ipc = watch_enabled.clone();
 
         IPC_DISPATCHER.with(|cell| {
             *cell.borrow_mut() = Some(Box::new(move || {
@@ -423,6 +552,12 @@ fn main() {
                     let resp = match req.cmd {
                         IpcCommand::Status => {
                             let pr = prog_ipc.lock().unwrap();
+                            let overflows_arr = j_arr(
+                                pr.overflow_errors
+                                    .iter()
+                                    .map(|s| j_str(s.clone()))
+                                    .collect::<Vec<_>>(),
+                            );
                             j_obj([
                                 ("running", j_bool(true)),
                                 ("version", j_str(VERSION)),
@@ -439,10 +574,29 @@ fn main() {
                                 ("window", j_str(pr.window_label.clone())),
                                 ("width", j_num(pr.width as f64)),
                                 ("height", j_num(pr.height as f64)),
+                                ("orientation", j_str(orientation_for_dims(pr.width, pr.height))),
                                 ("pointer_mode", j_str(pointer_mode_for_width(pr.width))),
+                                ("auto_watch", j_bool(watch_ipc.load(Ordering::Relaxed))),
                                 ("mode", j_str(pr.mode_label.clone())),
                                 ("logs_count", j_num(pr.log_history.len() as f64)),
+                                ("overflow_count", j_num(pr.overflow_errors.len() as f64)),
+                                ("overflows", overflows_arr),
                             ])
+                        }
+                        IpcCommand::ToggleWatch { enabled } => {
+                            let next =
+                                enabled.unwrap_or_else(|| !watch_ipc.load(Ordering::Relaxed));
+                            watch_ipc.store(next, Ordering::Relaxed);
+                            print_tagged_event(
+                                "WCH",
+                                if next { GREEN } else { YELLOW },
+                                if next {
+                                    "auto-reload watcher enabled (mcp)"
+                                } else {
+                                    "auto-reload watcher paused (mcp)"
+                                },
+                            );
+                            j_obj([("ok", j_bool(true)), ("auto_watch", j_bool(next))])
                         }
                         IpcCommand::HotReload => {
                             if let Some(stdin) = &mut *stdin_ipc.lock().unwrap() {
@@ -461,33 +615,57 @@ fn main() {
                             }
                             j_obj([("ok", j_bool(true)), ("action", j_str("hot_restart"))])
                         }
-                        IpcCommand::Resize { size } => match resolve_dimensions(&size) {
-                            Ok((w, h, label)) => {
-                                {
-                                    let mut pr = prog_ipc.lock().unwrap();
-                                    pr.width = w;
-                                    pr.height = h;
-                                    pr.window_label = format!("{}×{} ({})", w, h, label);
+                        IpcCommand::Resize { size } => {
+                            let trimmed = size.trim().to_ascii_lowercase();
+                            let resolved = match trimmed.as_str() {
+                                "rotate" => {
+                                    let pr = prog_ipc.lock().unwrap();
+                                    let (nw, nh) = (pr.height, pr.width);
+                                    Ok((nw, nh, orientation_for_dims(nw, nh).to_string()))
                                 }
-                                win_ipc.resize(w, h);
-                                wv_ipc.queue_resize();
-                                wv_ipc.queue_draw();
-                                sync_webview_pointer_mode(&wv_ipc, w);
-                                print_tagged_event(
-                                    "WIN",
-                                    CYAN,
-                                    &format!("{} {}({}×{} mcp){}", label, SUB, w, h, RESET),
-                                );
-                                j_obj([
-                                    ("ok", j_bool(true)),
-                                    ("width", j_num(w as f64)),
-                                    ("height", j_num(h as f64)),
-                                    ("preset", j_str(label)),
-                                    ("pointer_mode", j_str(pointer_mode_for_width(w))),
-                                ])
+                                "landscape" => {
+                                    let pr = prog_ipc.lock().unwrap();
+                                    let (nw, nh) = if pr.height > pr.width {
+                                        (pr.height, pr.width)
+                                    } else {
+                                        (pr.width, pr.height)
+                                    };
+                                    Ok((nw, nh, "landscape".to_string()))
+                                }
+                                "portrait" => {
+                                    let pr = prog_ipc.lock().unwrap();
+                                    let (nw, nh) = if pr.width > pr.height {
+                                        (pr.height, pr.width)
+                                    } else {
+                                        (pr.width, pr.height)
+                                    };
+                                    Ok((nw, nh, "portrait".to_string()))
+                                }
+                                _ => resolve_dimensions(&size),
+                            };
+                            match resolved {
+                                Ok((w, h, label)) => {
+                                    apply_window_resize(
+                                        &win_ipc,
+                                        &wv_ipc,
+                                        &prog_ipc,
+                                        w,
+                                        h,
+                                        &label,
+                                        " mcp",
+                                    );
+                                    j_obj([
+                                        ("ok", j_bool(true)),
+                                        ("width", j_num(w as f64)),
+                                        ("height", j_num(h as f64)),
+                                        ("preset", j_str(label)),
+                                        ("orientation", j_str(orientation_for_dims(w, h))),
+                                        ("pointer_mode", j_str(pointer_mode_for_width(w))),
+                                    ])
+                                }
+                                Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
                             }
-                            Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
-                        },
+                        }
                         IpcCommand::Screenshot => {
                             wv_ipc.queue_draw();
                             let out = match capture_screenshot_surface(&wv_ipc) {
