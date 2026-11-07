@@ -1,1 +1,5 @@
 /target
+localinstall.sh
+localupdate.sh
+*.bak
+

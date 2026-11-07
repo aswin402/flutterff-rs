@@ -13,28 +13,28 @@ Before starting, ensure you have the following installed on your Linux system:
 
 ## Compilation
 
-To manually build `flutterff-rs` locally:
+To manually build `flutterff-rs` locally (configured for single-job `-j 1` builds via `.cargo/config.toml`):
 
 ```bash
 git clone https://github.com/aswin402/flutterff-rs.git
 cd flutterff-rs
-cargo build --release
+cargo build --release -j 1
 ```
 
-## Quick Install (Script)
+## Quick Install (Local Script)
 
-We provide an installation script to auto-compile and place the binary into `~/.local/bin/`.
+Use the local installation script (`localinstall.sh`, ignored in `.gitignore` for local machine use) to auto-compile with a `cargo-pretty` live progress view and place the binary into `~/.local/bin/`:
 
 ```bash
-chmod +x install.sh
-./install.sh
+chmod +x localinstall.sh
+./localinstall.sh
 ```
 
 ## Update Mechanism 
 
-If you make modifications or pull the latest changes, use the provided update script that maintains a backup:
+If you make modifications or pull the latest changes, use the local update script (`localupdate.sh`) that maintains a backup:
 
 ```bash
-./update.sh
+./localupdate.sh
 ```
-This script rebuilds the executable, backs up the previous version as `~/.local/bin/flutterff-rs.bak`, and installs the new one.
+This script rebuilds the executable (`cargo build --release -j 1`), backs up the previous version as `~/.local/bin/flutterff-rs.bak`, and installs the new one.
