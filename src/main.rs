@@ -52,12 +52,12 @@ define_palette! {
     TEXT_RGB,     TEXT           = (205, 214, 244);
     SUBTEXT_RGB,  SUB            = (166, 173, 200);
     SURFACE1_RGB, _SURFACE1_ANSI = (69, 71, 90);
-    DIM_RGB,      DIM            = (108, 112, 134);
+    _DIM_RGB,     DIM            = (108, 112, 134);
     CYAN_RGB,     CYAN           = (0, 229, 255);
     SAPPHIRE_RGB, BLUE           = (56, 189, 248);
     MINT_RGB,     GREEN          = (80, 250, 123);
-    YELLOW_RGB,   YELLOW         = (249, 226, 175);
-    RED_RGB,      RED            = (243, 139, 168);
+    _YELLOW_RGB,  YELLOW         = (249, 226, 175);
+    _RED_RGB,     RED            = (243, 139, 168);
 }
 
 const BOLD: &str = "\x1b[1m";
@@ -116,18 +116,25 @@ const LEVEL_RULES: &[(&[&str], (&str, &str))] = &[
     (&["debug:"], ("DBG", DIM)),
 ];
 
-const CONSOLE_BRIDGE_JS: &str = r#"
-(function() {
-    ['log','warn','error','info','debug'].forEach(function(level) {
-        var orig = console[level];
-        console[level] = function() {
-            var msg = Array.prototype.slice.call(arguments).join(' ');
-            try { window.webkit.messageHandlers.flutterLog.postMessage(msg); } catch(e) {}
-            orig.apply(console, arguments);
-        };
-    });
-})();
-"#;
+const AGENT_BRIDGE_JS: &str = include_str!("agent_bridge.js");
+const MCP_BRIDGE_PREFIX: &str = "__FF_MCP__:";
+const DESKTOP_MIN_WIDTH: i32 = 1024;
+
+fn pointer_mode_for_width(w: i32) -> &'static str {
+    if w >= DESKTOP_MIN_WIDTH {
+        "cursor"
+    } else {
+        "touch"
+    }
+}
+
+fn sync_webview_pointer_mode(webview: &WebView, w: i32) {
+    let js = format!(
+        "if (window.__flutterff) {{ window.__flutterff.setPointerMode('{}'); }}",
+        pointer_mode_for_width(w)
+    );
+    webview.run_javascript(&js, gtk::gio::Cancellable::NONE, |_| {});
+}
 
 fn fg_rgb((r, g, b): Rgb) -> String {
     format!("\x1b[38;2;{};{};{}m", r, g, b)
@@ -1068,10 +1075,28 @@ fn main() {
     let manager = UserContentManager::new();
     manager.register_script_message_handler("flutterLog");
 
+    let pending_js_replies: Arc<Mutex<Vec<(u64, mpsc::SyncSender<mcp::JsonVal>)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let next_js_req_id: Arc<Mutex<u64>> = Arc::new(Mutex::new(1));
+
     let prog_js = progress.clone();
+    let pending_js_cb = pending_js_replies.clone();
     manager.connect_script_message_received(None, move |_, value| {
         if let Some(js_value) = value.js_value() {
             let text = js_value.to_string();
+            if let Some(json_str) = text.strip_prefix(MCP_BRIDGE_PREFIX) {
+                if let Ok(parsed) = mcp::JsonVal::parse(json_str)
+                    && let Some(req_id) = parsed.get("req_id").and_then(mcp::JsonVal::as_u64)
+                    && let Some(result) = parsed.get("result").cloned()
+                {
+                    let mut pending = pending_js_cb.lock().unwrap();
+                    if let Some(pos) = pending.iter().position(|(id, _)| *id == req_id) {
+                        let (_, tx) = pending.swap_remove(pos);
+                        let _ = tx.send(result);
+                    }
+                }
+                return;
+            }
             if let Some(out) = format_flutter_log(&text, LogSource::WebView) {
                 prog_js.lock().unwrap().log_or_print(out);
             }
@@ -1079,7 +1104,7 @@ fn main() {
     });
 
     let console_script = UserScript::new(
-        CONSOLE_BRIDGE_JS,
+        AGENT_BRIDGE_JS,
         UserContentInjectedFrames::AllFrames,
         UserScriptInjectionTime::Start,
         &[],
@@ -1130,6 +1155,7 @@ fn main() {
             );
             win.resize(w, h);
             wv.queue_resize();
+            sync_webview_pointer_mode(&wv, w);
             let wv_clone = wv.clone();
             glib::timeout_add_local(Duration::from_millis(100), move || {
                 wv_clone.queue_draw();
@@ -1153,6 +1179,23 @@ fn main() {
         take_screenshot(&wv_shot);
     });
     hb.pack_start(&shot_btn);
+
+    let inspect_btn = gtk::Button::new();
+    inspect_btn.set_image(Some(&gtk::Image::from_icon_name(
+        Some("find-location-symbolic"),
+        gtk::IconSize::Menu,
+    )));
+    inspect_btn.set_tooltip_text(Some("Toggle UI Inspector Overlay ([0], [1]...)"));
+    let wv_inspect = webview.clone();
+    inspect_btn.connect_clicked(move |_| {
+        wv_inspect.run_javascript(
+            "if (window.__flutterff) { window.__flutterff.dispatch(0, { action: 'inspect_overlay' }); }",
+            gtk::gio::Cancellable::NONE,
+            |_| {},
+        );
+        print_tagged_event("INS", CYAN, "toggled UI semantics overlay");
+    });
+    hb.pack_start(&inspect_btn);
 
     let reload_btn = gtk::Button::with_label("🗲");
     reload_btn.set_tooltip_text(Some("Hot Reload (r)"));
@@ -1239,130 +1282,169 @@ fn main() {
         let stdin_ipc = stdin_slot.clone();
         let url_ipc = current_url.clone();
         let prog_ipc = progress.clone();
+        let pending_ipc = pending_js_replies.clone();
+        let next_id_ipc = next_js_req_id.clone();
 
         glib::timeout_add_local(Duration::from_millis(50), move || {
             while let Ok(req) = ipc_rx.try_recv() {
-                let resp =
-                    match req.cmd {
-                        IpcCommand::Status => {
-                            let pr = prog_ipc.lock().unwrap();
-                            j_obj([
-                                ("running", j_bool(true)),
-                                ("version", j_str(VERSION)),
-                                ("ready", j_bool(pr.settled == Some(true))),
-                                (
-                                    "url",
-                                    j_str(pr.server_url.clone().unwrap_or_else(|| {
-                                        format!("http://localhost:{}", pr.port)
-                                    })),
+                let resp = match req.cmd {
+                    IpcCommand::Status => {
+                        let pr = prog_ipc.lock().unwrap();
+                        j_obj([
+                            ("running", j_bool(true)),
+                            ("version", j_str(VERSION)),
+                            ("ready", j_bool(pr.settled == Some(true))),
+                            (
+                                "url",
+                                j_str(
+                                    pr.server_url
+                                        .clone()
+                                        .unwrap_or_else(|| format!("http://localhost:{}", pr.port)),
                                 ),
-                                ("port", j_num(pr.port as f64)),
-                                ("window", j_str(pr.window_label.clone())),
-                                ("width", j_num(pr.width as f64)),
-                                ("height", j_num(pr.height as f64)),
-                                ("mode", j_str(pr.mode_label.clone())),
-                                ("logs_count", j_num(pr.log_history.len() as f64)),
-                            ])
+                            ),
+                            ("port", j_num(pr.port as f64)),
+                            ("window", j_str(pr.window_label.clone())),
+                            ("width", j_num(pr.width as f64)),
+                            ("height", j_num(pr.height as f64)),
+                            ("pointer_mode", j_str(pointer_mode_for_width(pr.width))),
+                            ("mode", j_str(pr.mode_label.clone())),
+                            ("logs_count", j_num(pr.log_history.len() as f64)),
+                        ])
+                    }
+                    IpcCommand::HotReload => {
+                        if let Some(stdin) = &mut *stdin_ipc.lock().unwrap() {
+                            let _ = stdin.write_all(b"r\n");
+                            let _ = stdin.flush();
                         }
-                        IpcCommand::HotReload => {
-                            if let Some(stdin) = &mut *stdin_ipc.lock().unwrap() {
-                                let _ = stdin.write_all(b"r\n");
-                                let _ = stdin.flush();
-                            }
-                            print_tagged_event("HOT", CYAN, "reload (mcp)");
-                            j_obj([("ok", j_bool(true)), ("action", j_str("hot_reload"))])
+                        print_tagged_event("HOT", CYAN, "reload (mcp)");
+                        j_obj([("ok", j_bool(true)), ("action", j_str("hot_reload"))])
+                    }
+                    IpcCommand::HotRestart => {
+                        print_tagged_event("HOT", CYAN, "restart · reloading webview (mcp)...");
+                        match &*url_ipc.lock().unwrap() {
+                            Some(url) => wv_ipc.load_uri(url),
+                            None => wv_ipc.reload(),
                         }
-                        IpcCommand::HotRestart => {
-                            print_tagged_event("HOT", CYAN, "restart · reloading webview (mcp)...");
-                            match &*url_ipc.lock().unwrap() {
-                                Some(url) => wv_ipc.load_uri(url),
-                                None => wv_ipc.reload(),
+                        j_obj([("ok", j_bool(true)), ("action", j_str("hot_restart"))])
+                    }
+                    IpcCommand::Resize { size } => match resolve_dimensions(&size) {
+                        Ok((w, h, label)) => {
+                            {
+                                let mut pr = prog_ipc.lock().unwrap();
+                                pr.width = w;
+                                pr.height = h;
+                                pr.window_label = format!("{}×{} ({})", w, h, label);
                             }
-                            j_obj([("ok", j_bool(true)), ("action", j_str("hot_restart"))])
-                        }
-                        IpcCommand::Resize { size } => match resolve_dimensions(&size) {
-                            Ok((w, h, label)) => {
-                                {
-                                    let mut pr = prog_ipc.lock().unwrap();
-                                    pr.width = w;
-                                    pr.height = h;
-                                    pr.window_label = format!("{}×{} ({})", w, h, label);
-                                }
-                                win_ipc.resize(w, h);
-                                wv_ipc.queue_resize();
-                                wv_ipc.queue_draw();
-                                print_tagged_event(
-                                    "WIN",
-                                    CYAN,
-                                    &format!("{} {}({}×{} mcp){}", label, SUB, w, h, RESET),
-                                );
-                                j_obj([
-                                    ("ok", j_bool(true)),
-                                    ("width", j_num(w as f64)),
-                                    ("height", j_num(h as f64)),
-                                    ("preset", j_str(label)),
-                                ])
-                            }
-                            Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
-                        },
-                        IpcCommand::Screenshot => {
+                            win_ipc.resize(w, h);
+                            wv_ipc.queue_resize();
                             wv_ipc.queue_draw();
-                            match capture_screenshot_surface(&wv_ipc) {
-                                Ok((path, w, h)) => j_obj([
-                                    ("ok", j_bool(true)),
-                                    ("path", j_str(path.to_string_lossy().to_string())),
-                                    ("width", j_num(w as f64)),
-                                    ("height", j_num(h as f64)),
-                                ]),
-                                Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
-                            }
-                        }
-                        IpcCommand::Logs {
-                            limit,
-                            level,
-                            clear,
-                        } => {
-                            let mut pr = prog_ipc.lock().unwrap();
-                            let lvl_upper = level.as_ref().map(|s| s.to_uppercase());
-                            let matched: Vec<String> = pr
-                                .log_history
-                                .iter()
-                                .rev()
-                                .filter(|line| match &lvl_upper {
-                                    Some(l) => line.contains(l.as_str()),
-                                    None => true,
-                                })
-                                .take(limit)
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .into_iter()
-                                .rev()
-                                .collect();
-                            if clear {
-                                pr.log_history.clear();
-                            }
+                            sync_webview_pointer_mode(&wv_ipc, w);
+                            print_tagged_event(
+                                "WIN",
+                                CYAN,
+                                &format!("{} {}({}×{} mcp){}", label, SUB, w, h, RESET),
+                            );
                             j_obj([
                                 ("ok", j_bool(true)),
-                                ("count", j_num(matched.len() as f64)),
-                                ("logs", j_str(matched.join("\n"))),
+                                ("width", j_num(w as f64)),
+                                ("height", j_num(h as f64)),
+                                ("preset", j_str(label)),
+                                ("pointer_mode", j_str(pointer_mode_for_width(w))),
                             ])
                         }
-                        IpcCommand::EvalJs { script } => {
-                            let cancel: Option<&gtk::gio::Cancellable> = None;
-                            wv_ipc.evaluate_javascript(&script, None, None, cancel, |_| {});
-                            j_obj([
+                        Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
+                    },
+                    IpcCommand::Screenshot => {
+                        wv_ipc.queue_draw();
+                        match capture_screenshot_surface(&wv_ipc) {
+                            Ok((path, w, h)) => j_obj([
                                 ("ok", j_bool(true)),
-                                ("action", j_str("eval_js_dispatched")),
-                            ])
+                                ("path", j_str(path.to_string_lossy().to_string())),
+                                ("width", j_num(w as f64)),
+                                ("height", j_num(h as f64)),
+                            ]),
+                            Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
                         }
-                        IpcCommand::Stop => {
-                            let _ = req
-                                .reply_tx
-                                .send(j_obj([("ok", j_bool(true)), ("action", j_str("stopping"))]));
-                            win_ipc.close();
-                            return glib::ControlFlow::Break;
+                    }
+                    IpcCommand::Logs {
+                        limit,
+                        level,
+                        clear,
+                    } => {
+                        let mut pr = prog_ipc.lock().unwrap();
+                        let lvl_upper = level.as_ref().map(|s| s.to_uppercase());
+                        let matched: Vec<String> = pr
+                            .log_history
+                            .iter()
+                            .rev()
+                            .filter(|line| match &lvl_upper {
+                                Some(l) => line.contains(l.as_str()),
+                                None => true,
+                            })
+                            .take(limit)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        if clear {
+                            pr.log_history.clear();
                         }
-                    };
+                        j_obj([
+                            ("ok", j_bool(true)),
+                            ("count", j_num(matched.len() as f64)),
+                            ("logs", j_str(matched.join("\n"))),
+                        ])
+                    }
+                    IpcCommand::WebAgent { payload } => {
+                        let req_id = {
+                            let mut id_guard = next_id_ipc.lock().unwrap();
+                            let id = *id_guard;
+                            *id_guard = id.wrapping_add(1);
+                            id
+                        };
+                        let action_name = payload
+                            .get("action")
+                            .and_then(mcp::JsonVal::as_str)
+                            .unwrap_or("agent")
+                            .to_string();
+                        print_tagged_event(
+                            "AGT",
+                            CYAN,
+                            &format!("{} {}#{}{}", action_name, SUB, req_id, RESET),
+                        );
+                        pending_ipc.lock().unwrap().push((req_id, req.reply_tx));
+                        let js = format!(
+                            "if (window.__flutterff) {{ window.__flutterff.dispatch({}, {}); }} else {{ window.webkit.messageHandlers.flutterLog.postMessage('{}' + JSON.stringify({{ req_id: {}, result: {{ ok: false, error: 'WebView agent bridge not ready' }} }})); }}",
+                            req_id,
+                            payload.to_json(),
+                            MCP_BRIDGE_PREFIX,
+                            req_id
+                        );
+                        let pending_err = pending_ipc.clone();
+                        wv_ipc.run_javascript(&js, gtk::gio::Cancellable::NONE, move |res| {
+                            if let Err(e) = res {
+                                let mut pending = pending_err.lock().unwrap();
+                                if let Some(pos) = pending.iter().position(|(id, _)| *id == req_id)
+                                {
+                                    let (_, tx) = pending.swap_remove(pos);
+                                    let _ = tx.send(j_obj([
+                                        ("ok", j_bool(false)),
+                                        ("error", j_str(format!("JS evaluation error: {}", e))),
+                                    ]));
+                                }
+                            }
+                        });
+                        continue;
+                    }
+                    IpcCommand::Stop => {
+                        let _ = req
+                            .reply_tx
+                            .send(j_obj([("ok", j_bool(true)), ("action", j_str("stopping"))]));
+                        win_ipc.close();
+                        return glib::ControlFlow::Break;
+                    }
+                };
                 let _ = req.reply_tx.send(resp);
             }
             glib::ControlFlow::Continue

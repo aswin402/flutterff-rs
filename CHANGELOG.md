@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [2.5.4] - 2026-11-08
+
+### ✨ Added
+- **In-Page GUI Agent & Flutter Semantics Inspector (`src/agent_bridge.js` — Inspired by [alibaba/page-agent](https://github.com/alibaba/page-agent))**:
+  - Auto-activates Flutter Web's `<flt-semantics-placeholder>` and traverses `document` plus open Shadow Roots (`<flutter-view>`, `<flt-glass-pane>`) to index interactive widgets (`[0]`, `[1]`, `[2]...`) with roles, labels, values, and `(x, y)` coordinates.
+  - Added 6 new table-driven MCP UI testing & debugging tools (`WEB_AGENT_TOOL_MAP` in `src/mcp.rs`):
+    - `flutter_ui_tree` *(+ `flutterff://ui_tree` resource)* — Returns the indexed widget tree (`[0] [textfield] ...`) and active pointer mode.
+    - `flutter_tap` — Taps/clicks a widget by `index`, `text`/label, or `(x, y)` coordinates.
+    - `flutter_type` — Focuses a target Flutter `TextField` or HTML input, sets its value via the native prototype setter + `InputEvent`, and optionally submits with `Enter`.
+    - `flutter_scroll` — Scrolls/swipes any scrollable container or coordinate `(dx, dy)`.
+    - `flutter_press_key` — Dispatches keyboard events (`Enter`, `Escape`, `Backspace`, `Tab`, arrow keys).
+    - `flutter_inspect_overlay` — Toggles visual Set-of-Mark (`[0]`, `[1]`) cyan/mint bounding boxes and configures `pointer_mode` (`"auto"`, `"cursor"`, `"touch"`).
+- **Adaptive Pointer Visualization & Events (Desktop Cursor vs. Mobile Touch Dot)**:
+  - **Desktop Mode (`"cursor"`, width `>= 1024px`)**: Renders a Red-Orange (`#FF4500`) `Bibata-Modern-Ice`-shaped `24×24` SVG pointer with white border and dispatches desktop mouse event sequences (`pointermove` → `mouseover` → `mousedown` → `mouseup` → `click`).
+  - **Mobile/Tablet Mode (`"touch"`, width `< 1024px`)**: Renders a compact `12×12px` solid Red-Orange (`#FF4500`) touch dot (without outer ring clutter) and dispatches mobile touch event sequences (`pointerdown` → `touchstart` → `touchend` → `click`).
+  - Automatically switches between `"touch"` and `"cursor"` when resizing via the GTK HeaderBar preset switcher or `flutter_resize`.
+- **GTK HeaderBar Inspector Toggle & Synchronous JS RPC**:
+  - Added a HeaderBar button (`find-location-symbolic`) to toggle the `[0]`, `[1]` UI Semantics overlay with one click.
+  - Added bidirectional JS return-value routing (`MCP_BRIDGE_PREFIX`) so `flutter_eval_js` and all `WebAgent` commands return evaluated results synchronously to MCP clients.
+
+---
+
 ## [2.5.3] - 2026-11-07
 
 ### ✨ Added

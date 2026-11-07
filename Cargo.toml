@@ -1,6 +1,6 @@
 [package]
 name = "flutterff-rs"
-version = "2.5.3"
+version = "2.5.4"
 edition = "2024"
 rust-version = "1.99"
 description = "Lightweight native Flutter web development launcher for Linux"

@@ -470,12 +470,160 @@ const TOOL_SPECS: &[ToolSpec] = &[
         ],
     },
     ToolSpec {
+        name: "flutter_ui_tree",
+        desc: "Inspect the live Flutter Semantics & DOM UI tree (page-agent style). Auto-enables Flutter Web semantics and returns indexed interactive widgets ([0], [1], [2]...) with roles, labels, values, bounding-box coordinates, and active pointer mode (desktop 'cursor' vs mobile 'touch' dot).",
+        params: &[
+            ToolParamSpec {
+                name: "include_static",
+                kind: "boolean",
+                desc: "Include static text/label semantics nodes in addition to interactive widgets (default: false).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "overlay",
+                kind: "boolean",
+                desc: "Render visual [0], [1] Set-of-Mark bounding-box badges over the simulator window (default: false).",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
+        name: "flutter_tap",
+        desc: "Tap or click a Flutter widget by its UI tree index ([0], [1]...), visible text/label, or viewport (x, y) coordinates. Automatically uses a glowing Touch Dot (●) + touch events on mobile/tablet viewports and an Electric Cyan Cursor (↖) + mouse events on desktop viewports.",
+        params: &[
+            ToolParamSpec {
+                name: "index",
+                kind: "integer",
+                desc: "Element index from flutter_ui_tree (e.g. 0, 1, 2).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "text",
+                kind: "string",
+                desc: "Case-insensitive widget label or text substring to tap (e.g. 'Sign In').",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "x",
+                kind: "integer",
+                desc: "Explicit viewport X coordinate (used when index and text are omitted).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "y",
+                kind: "integer",
+                desc: "Explicit viewport Y coordinate (used when index and text are omitted).",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
+        name: "flutter_type",
+        desc: "Type text into a Flutter TextField or HTML input. Can optionally tap a target widget by index or label first to focus it, clear existing text, and press Enter to submit.",
+        params: &[
+            ToolParamSpec {
+                name: "text",
+                kind: "string",
+                desc: "Text string to type into the input field.",
+                required: true,
+            },
+            ToolParamSpec {
+                name: "index",
+                kind: "integer",
+                desc: "Optional UI tree index of the textfield to tap/focus before typing.",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "target_text",
+                kind: "string",
+                desc: "Optional label or placeholder of the textfield to tap/focus before typing.",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "clear",
+                kind: "boolean",
+                desc: "Clear existing field value before typing (default: true).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "submit",
+                kind: "boolean",
+                desc: "Dispatch Enter key after typing to submit (default: false).",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
+        name: "flutter_scroll",
+        desc: "Scroll or swipe the Flutter viewport or a specific scrollable widget. Animates a touch swipe dot on mobile or cursor wheel scroll on desktop.",
+        params: &[
+            ToolParamSpec {
+                name: "dx",
+                kind: "integer",
+                desc: "Horizontal scroll delta in pixels (default: 0).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "dy",
+                kind: "integer",
+                desc: "Vertical scroll delta in pixels (positive = scroll down, negative = scroll up, default: 300).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "index",
+                kind: "integer",
+                desc: "Optional UI tree index of the scrollable container.",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "x",
+                kind: "integer",
+                desc: "Optional viewport X coordinate to scroll at.",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "y",
+                kind: "integer",
+                desc: "Optional viewport Y coordinate to scroll at.",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
+        name: "flutter_press_key",
+        desc: "Dispatch a keyboard key press (e.g. 'Enter', 'Escape', 'Backspace', 'Tab', 'ArrowDown', 'ArrowUp') to the active Flutter widget.",
+        params: &[ToolParamSpec {
+            name: "key",
+            kind: "string",
+            desc: "Key name to press (e.g. 'Enter', 'Escape', 'Tab', 'Backspace').",
+            required: true,
+        }],
+    },
+    ToolSpec {
+        name: "flutter_inspect_overlay",
+        desc: "Toggle the visual Set-of-Mark ([0], [1]...) widget bounding-box overlay and configure the pointer mode ('auto', 'cursor' for desktop arrow, or 'touch' for mobile dot).",
+        params: &[
+            ToolParamSpec {
+                name: "enabled",
+                kind: "boolean",
+                desc: "Enable or disable the [0], [1] bounding-box inspector overlay (toggles if omitted).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "pointer_mode",
+                kind: "string",
+                desc: "Pointer visualization & event mode: 'auto' (desktop=cursor, mobile=touch dot), 'cursor', or 'touch'.",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
         name: "flutter_eval_js",
-        desc: "Execute a JavaScript snippet inside the running WebKit2 WebView.",
+        desc: "Execute a JavaScript snippet inside the running WebKit2 WebView and return the evaluated result.",
         params: &[ToolParamSpec {
             name: "script",
             kind: "string",
-            desc: "JavaScript code to evaluate in the WebView.",
+            desc: "JavaScript code to evaluate in the WebView (use `return ...` to return a value).",
             required: true,
         }],
     },
@@ -486,12 +634,29 @@ const TOOL_SPECS: &[ToolSpec] = &[
     },
 ];
 
+/// Maps MCP tool names to in-page `window.__flutterff` action names
+const WEB_AGENT_TOOL_MAP: &[(&str, &str)] = &[
+    ("flutter_ui_tree", "ui_tree"),
+    ("flutter_tap", "tap"),
+    ("flutter_type", "type_text"),
+    ("flutter_scroll", "scroll"),
+    ("flutter_press_key", "press_key"),
+    ("flutter_inspect_overlay", "inspect_overlay"),
+    ("flutter_eval_js", "eval_js"),
+];
+
 const RESOURCE_SPECS: &[ResourceSpec] = &[
     ResourceSpec {
         uri: "flutterff://status",
         name: "flutterff-rs Live Status",
         mime: "application/json",
         desc: "Current simulator status, window size, URL, and mode.",
+    },
+    ResourceSpec {
+        uri: "flutterff://ui_tree",
+        name: "flutterff-rs Live UI Semantics Tree",
+        mime: "text/plain",
+        desc: "Page-agent style indexed Flutter Semantics & DOM widget tree ([0], [1]...).",
     },
     ResourceSpec {
         uri: "flutterff://logs",
@@ -574,15 +739,21 @@ pub enum IpcCommand {
         level: Option<String>,
         clear: bool,
     },
-    EvalJs {
-        script: String,
+    WebAgent {
+        payload: JsonVal,
     },
     Stop,
 }
 
 impl IpcCommand {
     fn from_json(req: &JsonVal) -> Option<Self> {
-        match req.get("action").and_then(JsonVal::as_str)? {
+        let action = req.get("action").and_then(JsonVal::as_str)?;
+        if WEB_AGENT_TOOL_MAP.iter().any(|&(_, a)| a == action) {
+            return Some(Self::WebAgent {
+                payload: req.clone(),
+            });
+        }
+        match action {
             "status" => Some(Self::Status),
             "hot_reload" => Some(Self::HotReload),
             "hot_restart" => Some(Self::HotRestart),
@@ -604,13 +775,6 @@ impl IpcCommand {
                     .and_then(JsonVal::as_str)
                     .map(str::to_string),
                 clear: req.get("clear").and_then(JsonVal::as_bool).unwrap_or(false),
-            }),
-            "eval_js" => Some(Self::EvalJs {
-                script: req
-                    .get("script")
-                    .and_then(JsonVal::as_str)
-                    .unwrap_or("")
-                    .to_string(),
             }),
             "stop" => Some(Self::Stop),
             _ => None,
@@ -675,6 +839,27 @@ fn send_ipc(req: JsonVal) -> Result<JsonVal, String> {
         .read_line(&mut line)
         .map_err(|e| format!("IPC read failed: {}", e))?;
     JsonVal::parse(&line)
+}
+
+fn forward_web_agent(action: &'static str, args: &JsonVal) -> JsonVal {
+    let mut entries = match args {
+        JsonVal::Obj(list) => list.clone(),
+        _ => Vec::new(),
+    };
+    entries.insert(0, ("action".to_string(), j_str(action)));
+    match send_ipc(JsonVal::Obj(entries)) {
+        Ok(resp) => {
+            let is_err = resp.get("ok").and_then(JsonVal::as_bool) == Some(false);
+            if action == "ui_tree"
+                && !is_err
+                && let Some(summary) = resp.get("summary").and_then(JsonVal::as_str)
+            {
+                return tool_text_result(format!("{}\n\n{}", summary, resp.to_json()), false);
+            }
+            tool_text_result(resp.to_json(), is_err)
+        }
+        Err(e) => tool_text_result(e, true),
+    }
 }
 
 fn forward_ipc_action(action: &'static str, mut extra: Vec<(&'static str, JsonVal)>) -> JsonVal {
@@ -803,6 +988,14 @@ fn handle_resource_read(req_id: JsonVal, params: &JsonVal) -> JsonVal {
         "flutterff://status" => send_ipc(j_obj([("action", j_str("status"))]))
             .unwrap_or_else(|e| j_obj([("running", j_bool(false)), ("message", j_str(e))]))
             .to_json(),
+        "flutterff://ui_tree" => send_ipc(j_obj([("action", j_str("ui_tree"))]))
+            .ok()
+            .and_then(|resp| {
+                resp.get("summary")
+                    .and_then(JsonVal::as_str)
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| "No running simulator session.".to_string()),
         "flutterff://logs" => send_ipc(j_obj([
             ("action", j_str("logs")),
             ("limit", j_num((DEFAULT_LOG_LIMIT * 2) as f64)),
@@ -835,6 +1028,10 @@ fn handle_tool_call(req_id: JsonVal, params: &JsonVal) -> JsonVal {
         }
     }
 
+    if let Some(&(_, agent_action)) = WEB_AGENT_TOOL_MAP.iter().find(|&&(t, _)| t == name) {
+        return rpc_ok(req_id, forward_web_agent(agent_action, &args));
+    }
+
     let result = match name {
         "flutter_status" => match send_ipc(j_obj([("action", j_str("status"))])) {
             Ok(resp) => tool_text_result(resp.to_json(), false),
@@ -853,10 +1050,6 @@ fn handle_tool_call(req_id: JsonVal, params: &JsonVal) -> JsonVal {
                 .and_then(JsonVal::as_str)
                 .unwrap_or(DEFAULT_PRESET);
             forward_ipc_action("resize", vec![("size", j_str(size))])
-        }
-        "flutter_eval_js" => {
-            let script = args.get("script").and_then(JsonVal::as_str).unwrap_or("");
-            forward_ipc_action("eval_js", vec![("script", j_str(script))])
         }
         "flutter_screenshot" => {
             let include_img = args

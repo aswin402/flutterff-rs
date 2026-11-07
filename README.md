@@ -7,7 +7,7 @@
 **A lightweight, terminal-first Flutter Web development launcher & native mobile simulator for Linux.**  
 *Native GTK3 + WebKit2GTK viewport · 24-bit `cargo-pretty` live terminal TUI · Zero Chrome overhead.*
 
-[![Version](https://img.shields.io/badge/version-2.5.3-00E5FF?style=flat-square&labelColor=1E1E2E)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.5.4-00E5FF?style=flat-square&labelColor=1E1E2E)](CHANGELOG.md)
 [![Rust Edition](https://img.shields.io/badge/rust-2024%20(1.99%2B)-027DFD?style=flat-square&logo=rust&logoColor=white&labelColor=1E1E2E)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-linux%20(X11%20%2F%20Wayland)-50FA7B?style=flat-square&logo=linux&logoColor=white&labelColor=1E1E2E)](#)
 [![Design System](https://img.shields.io/badge/DESIGN.md-awesome--design--md-72EFDD?style=flat-square&labelColor=1E1E2E)](DESIGN.md)
@@ -21,7 +21,7 @@
 
 Launching a full Chromium instance or Android Emulator for Flutter UI iteration consumes gigabytes of RAM and clutters your workspace with browser chrome. **`flutterff-rs`** orchestrates `flutter run -d web-server` in a background thread and renders your app inside a minimal, chromeless **GTK3 + WebKit2GTK** window tailored to mobile, tablet, and desktop presets—paired with a 20 FPS **[`cargo-pretty`](https://github.com/romancitodev/cargo-pretty)**-style terminal UI.
 
-| Capability | Chrome / Standard Web | `flutterff-rs` v2.5.3 |
+| Capability | Chrome / Standard Web | `flutterff-rs` v2.5.4 |
 | :--- | :--- | :--- |
 | **Memory Footprint** | 800 MB – 2.5 GB+ | **Minimal (`WebKit2GTK` `DocumentViewer` cache)** |
 | **Window Chrome** | Tabs, omnibox, bookmarks bar | **Single minimal GTK3 `HeaderBar` (`menu:close`)** |
@@ -47,7 +47,7 @@ Launching a full Chromium instance or Android Emulator for Flutter UI iteration 
 During both local compilation (`./localinstall.sh` / `./localupdate.sh`) and `flutterff-rs` startup, the terminal renders a 20 FPS inline status view with RGB alpha-fading rows, per-step timers, and a sweeping Cyan-Blue-Mint progress ramp before settling into a clean summary card:
 
 ```text
-🦊 flutterff-rs v2.5.3
+🦊 flutterff-rs v2.5.4
 flutter run -d web-server --web-port=8080
 ────────────────────────────────────────
 Building
@@ -69,7 +69,7 @@ Elapsed       04.32s
 Once the local socket accepts connections, the live view settles into:
 
 ```text
-✓ flutterff-rs v2.5.3 serving in 4.86s
+✓ flutterff-rs v2.5.4 serving in 4.86s
   window         412×915 (mobile)
   server         http://localhost:8080
   mode           debug · online
@@ -167,7 +167,7 @@ flutterff-rs [OPTIONS]
 | `--flavor <NAME>` | | Pass a custom `--flavor` to Flutter. |
 | `--no-hot` | | Disable hot reload support. |
 | `--list-sizes` | | Display all built-in device size presets and dimensions. |
-| `--version` | `-V` | Print `flutterff-rs` version (`v2.5.3`). |
+| `--version` | `-V` | Print `flutterff-rs` version (`v2.5.4`). |
 | `--help` | `-h` | Print CLI help information. |
 
 ---
@@ -193,35 +193,42 @@ flutterff-rs [OPTIONS]
 
 | MCP Tool / Resource | Description |
 | :--- | :--- |
-| **`flutter_status`** | Returns live JSON status (running state, URL, port, window size, mode, log count). |
+| **`flutter_status`** | Returns live JSON status (running state, URL, port, window size, `pointer_mode`, mode, log count). |
 | **`flutter_launch`** | Spawns a new `flutterff-rs` simulator window (`project_dir`, `size`, `port`, `offline`, `profile`, `flavor`). |
+| **`flutter_ui_tree`** | **[`page-agent`](https://github.com/alibaba/page-agent)-style Semantics & DOM Inspector**: Auto-enables Flutter Web semantics and returns indexed interactive widgets (`[0]`, `[1]`, `[2]...`) with roles, labels, values, and `(x, y)` coordinates. |
+| **`flutter_tap`** | Taps/clicks a Flutter widget by **`index`** (`[0]`), **`text`/label** (`"Sign In"`), or **`(x, y)` coordinates**. Uses a **Red-Orange Mobile Touch Dot (`●`) + touch events** on mobile/tablet viewports and a **Red-Orange `Bibata-Modern-Ice` Desktop Cursor (`↖`) + mouse events** on desktop viewports. |
+| **`flutter_type`** | Types text into a Flutter `TextField` or input (`text`, optional `index` or `target_text` to tap/focus first, `clear`, and `submit`). |
+| **`flutter_scroll`** | Scrolls or swipes the viewport or an indexed scrollable widget (`dx`, `dy`, `index`, `x`, `y`) with animated touch drag or wheel motion. |
+| **`flutter_press_key`** | Dispatches keyboard events (`Enter`, `Escape`, `Backspace`, `Tab`, `ArrowDown`, etc.) to the active Flutter widget. |
+| **`flutter_inspect_overlay`** | Toggles the visual `[0]`, `[1]` Set-of-Mark bounding-box overlay and configures `pointer_mode` (`"auto"`, `"cursor"`, `"touch"`). |
 | **`flutter_hot_reload`** | Injects `'r'` into the running Flutter daemon for instant Hot Reload. |
 | **`flutter_hot_restart`** | Triggers a crash-safe WebView Hot Restart. |
-| **`flutter_resize`** | Dynamically resizes the GTK window to any preset (`mobile`, `iphone`, `tablet`, `desktop`) or custom `WxH`. |
+| **`flutter_resize`** | Dynamically resizes the GTK window to any preset (`mobile`, `iphone`, `tablet`, `desktop`) or custom `WxH` and auto-switches `pointer_mode`. |
 | **`flutter_screenshot`** | Captures a native Cairo `ARgb32` PNG snapshot (`screenshots/screenshot_*.png`) and returns inline base64 `image/png` content. |
 | **`flutter_logs`** | Reads recent filtered Flutter & WebView logs (`INF`, `WRN`, `ERR`, `DBG`) with optional `limit`, `level`, and `clear`. |
-| **`flutter_eval_js`** | Evaluates arbitrary JavaScript inside the live WebKit2 WebView. |
+| **`flutter_eval_js`** | Evaluates arbitrary JavaScript inside the live WebKit2 WebView and returns the evaluated result synchronously. |
 | **`flutter_stop`** | Gracefully stops the Flutter daemon (`'q'`) and closes the simulator window. |
-| **`flutterff://status` · `flutterff://logs` · `flutterff://presets`** | Built-in MCP Resources for querying live simulator state, logs, and viewport presets. |
+| **`flutterff://status` · `flutterff://ui_tree` · `flutterff://logs` · `flutterff://presets`** | Built-in MCP Resources for querying live simulator state, indexed UI tree, logs, and viewport presets. |
 
-### Built-in Device Presets
+### Built-in Device Presets & Adaptive Pointer Mode
 
-| Preset Name | Dimensions (`W×H`) | Target Form Factor |
-| :--- | :--- | :--- |
-| **`mobile`** *(default)* | `412 × 915` | Modern Android flagship portrait |
-| **`mobile-small`** | `360 × 800` | Compact Android portrait |
-| **`iphone`** | `390 × 844` | iPhone 13 / 14 portrait |
-| **`tablet`** | `768 × 1024` | iPad / Tablet portrait |
-| **`desktop`** | `1280 × 800` | Widescreen desktop / Web layout |
+| Preset Name | Dimensions (`W×H`) | Pointer Mode | Target Form Factor |
+| :--- | :--- | :--- | :--- |
+| **`mobile`** *(default)* | `412 × 915` | **`touch`** *(Red-Orange Touch Dot `●` + Touch Events)* | Modern Android flagship portrait |
+| **`mobile-small`** | `360 × 800` | **`touch`** *(Red-Orange Touch Dot `●` + Touch Events)* | Compact Android portrait |
+| **`iphone`** | `390 × 844` | **`touch`** *(Red-Orange Touch Dot `●` + Touch Events)* | iPhone 13 / 14 portrait |
+| **`tablet`** | `768 × 1024` | **`touch`** *(Red-Orange Touch Dot `●` + Touch Events)* | iPad / Tablet portrait |
+| **`desktop`** | `1280 × 800` | **`cursor`** *(Red-Orange `Bibata` Arrow `↖` + Mouse Events)* | Widescreen desktop / Web layout |
 
 ---
 
 ## 📂 Repository Layout
 
-- **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.3`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5`, `chrono 0.4.45` — zero `regex` dependency).
+- **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.4`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5`, `chrono 0.4.45` — zero `regex` dependency).
 - **[`.cargo/config.toml`](.cargo/config.toml)** — Enforces single-job (`jobs = 1` / `-j 1`) Cargo builds and checks.
 - **[`src/main.rs`](src/main.rs)** — Core launcher, GTK3/WebKit2 window shell, Cairo screenshot engine, local Unix IPC bridge, and `cargo-pretty` terminal TUI.
 - **[`src/mcp.rs`](src/mcp.rs)** — Zero-dependency native Rust Model Context Protocol (MCP) JSON-RPC 2.0 server, minimal JSON parser/serializer, and base64 PNG encoder.
+- **[`src/agent_bridge.js`](src/agent_bridge.js)** — In-page GUI agent & Flutter Semantics inspector (inspired by [`alibaba/page-agent`](https://github.com/alibaba/page-agent)) with adaptive desktop cursor (`↖`) and mobile touch dot (`●`) overlays.
 - **[`DESIGN.md`](DESIGN.md)** — Semantic design system specification ([VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md) format).
 - **[`CHANGELOG.md`](CHANGELOG.md)** — Version history and release notes.
 - **[`docs/`](docs/)** — Detailed guides on [architecture](docs/architecture.md), [dependencies](docs/modifications_and_packages.md), [installation](docs/setup_and_installation.md), and [usage](docs/usage_and_examples.md).
