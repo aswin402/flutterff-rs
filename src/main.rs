@@ -16,15 +16,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
-use gtk::{Box as GtkBox, HeaderBar, Menu, MenuButton, MenuItem};
+use gtk::{Box as GtkBox, Entry, HeaderBar, Menu, MenuButton, MenuItem};
 use webkit2gtk::{
-    CacheModel, HardwareAccelerationPolicy, SettingsExt, UserContentInjectedFrames,
-    UserContentManager, UserContentManagerExt, UserScript, UserScriptInjectionTime, WebContext,
-    WebContextExt, WebView, WebViewExt, WebViewExtManual,
+    CacheModel, HardwareAccelerationPolicy, MemoryPressureSettings, SettingsExt,
+    UserContentInjectedFrames, UserContentManager, UserContentManagerExt, UserScript,
+    UserScriptInjectionTime, WebContext, WebContextExt, WebView, WebViewExt, WebViewExtManual,
+    WebsiteDataManager,
 };
 
 use config::{
-    CliAction, CliConfig, DEVICE_PRESETS, PKG_NAME, VERSION, orientation_for_dims,
+    CliAction, CliConfig, DEVICE_PRESETS, PKG_NAME, VERSION, normalize_url, orientation_for_dims,
     pointer_mode_for_width, print_help, print_size_presets, resolve_dimensions,
     spawn_compact_thread,
 };
@@ -50,12 +51,20 @@ pub fn trim_process_heap() {
     }
 }
 
-/// Bounds glibc arenas, WebKit bmalloc/DMA-BUF overhead, and Mesa thread pools
+/// Bounds glibc arenas, JSC MiniVM/RAM ceiling/JIT tiers, Wasm guard cages, and Mesa threads
 fn tune_allocator_env() {
     for (key, val) in [
         ("MALLOC_ARENA_MAX", "2"),
         ("MALLOC_TRIM_THRESHOLD_", "65536"),
         ("JavaScriptCoreUseBMalloc", "0"),
+        ("JSC_forceRAMSize", "134217728"),
+        ("JSC_useFTLJIT", "0"),
+        ("JSC_useOMGJIT", "0"),
+        ("JSC_useWasmFastMemory", "0"),
+        ("JSC_numberOfDFGCompilerThreads", "1"),
+        ("JSC_numberOfFTLCompilerThreads", "0"),
+        ("JSC_numberOfWasmCompilerThreads", "1"),
+        ("JSC_numberOfGCMarkers", "1"),
         ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
         ("GALLIUM_THREAD", "0"),
         ("LP_NUM_THREADS", "1"),
@@ -73,22 +82,39 @@ thread_local! {
     static URL_DISPATCHER: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
 }
 
-fn configure_low_memory_webview(webview: &WebView) {
+fn build_low_memory_web_context() -> WebContext {
+    let mut mem = MemoryPressureSettings::new();
+    mem.set_memory_limit(128);
+    mem.set_conservative_threshold(0.30);
+    mem.set_strict_threshold(0.55);
+    mem.set_kill_threshold(0.0);
+    mem.set_poll_interval(2.0);
+    WebsiteDataManager::set_memory_pressure_settings(&mut mem);
+
+    let ctx = WebContext::default().unwrap();
+    ctx.set_cache_model(CacheModel::DocumentViewer);
+    #[allow(deprecated)]
+    ctx.set_web_process_count_limit(1);
+    ctx
+}
+
+fn configure_low_memory_webview(webview: &WebView, browser_mode: bool) {
     if let Some(settings) = WebViewExt::settings(webview) {
         settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::OnDemand);
-        settings.set_enable_page_cache(false);
+        settings.set_enable_page_cache(browser_mode);
+        settings.set_enable_back_forward_navigation_gestures(browser_mode);
         settings.set_enable_offline_web_application_cache(false);
         settings.set_enable_html5_database(false);
         settings.set_enable_dns_prefetching(false);
         settings.set_enable_hyperlink_auditing(false);
         settings.set_enable_developer_extras(false);
         settings.set_enable_smooth_scrolling(false);
-        settings.set_enable_webaudio(false);
-        settings.set_enable_media(false);
+        settings.set_enable_webaudio(browser_mode);
+        settings.set_enable_media(browser_mode);
         settings.set_enable_media_stream(false);
-        settings.set_enable_mediasource(false);
+        settings.set_enable_mediasource(browser_mode);
         settings.set_enable_encrypted_media(false);
-        settings.set_enable_site_specific_quirks(false);
+        settings.set_enable_site_specific_quirks(browser_mode);
     }
 }
 
@@ -166,12 +192,13 @@ fn main() {
         size_label = format!("{}-landscape", size_label);
     }
 
-    if !is_port_free(cfg.port) {
+    let browser_mode = cfg.url.is_some();
+    if !browser_mode && !is_port_free(cfg.port) {
         cfg.port = find_free_port(cfg.port.saturating_add(1));
     }
 
     let net_check_start = Instant::now();
-    if !cfg.offline && !check_online() {
+    if !browser_mode && !cfg.offline && !check_online() {
         cfg.offline = true;
     }
     let net_check_secs = net_check_start.elapsed().as_secs_f32();
@@ -197,13 +224,20 @@ fn main() {
         flutter_cmd.extend(["--flavor".to_string(), f.clone()]);
     }
 
-    let flag_line = flutter_cmd.join(" ");
+    let flag_line = match &cfg.url {
+        Some(u) => format!("browser {}", u),
+        None => flutter_cmd.join(" "),
+    };
     let window_label = format!("{}×{} ({})", width, height, size_label);
-    let mode_label = format!(
-        "{} · {}",
-        if cfg.profile { "profile" } else { "debug" },
-        if cfg.offline { "offline" } else { "online" }
-    );
+    let mode_label = if browser_mode {
+        "browser · direct".to_string()
+    } else {
+        format!(
+            "{} · {}",
+            if cfg.profile { "profile" } else { "debug" },
+            if cfg.offline { "offline" } else { "online" }
+        )
+    };
 
     let progress = Arc::new(Mutex::new(PrettyProgress::new(
         flag_line,
@@ -214,7 +248,7 @@ fn main() {
         mode_label,
     )));
 
-    {
+    if !browser_mode {
         let mut p = progress.lock().unwrap();
         p.seen = 1;
         p.done.push((
@@ -226,14 +260,13 @@ fn main() {
             net_check_secs.max(0.01),
         ));
         p.start_step(Step::GtkShell, None);
+        drop(p);
+        spawn_pretty_tui(progress.clone(), started);
     }
-
-    spawn_pretty_tui(progress.clone(), started);
 
     gtk::init().expect("Failed to initialize GTK");
 
-    let context = WebContext::default().unwrap();
-    context.set_cache_model(CacheModel::DocumentViewer);
+    let context = build_low_memory_web_context();
 
     let manager = UserContentManager::new();
     manager.register_script_message_handler("flutterLog");
@@ -276,7 +309,7 @@ fn main() {
     manager.add_script(&console_script);
 
     let webview = WebView::new_with_context_and_user_content_manager(&context, &manager);
-    configure_low_memory_webview(&webview);
+    configure_low_memory_webview(&webview, browser_mode);
     webview.load_uri("about:blank");
     webview.connect_context_menu(|_, _, _, _| true);
 
@@ -394,8 +427,16 @@ fn main() {
     }
     hb.pack_start(&watch_btn);
 
+    let nav_btn = gtk::Button::new();
+    nav_btn.set_image(Some(&gtk::Image::from_icon_name(
+        Some("applications-internet-symbolic"),
+        gtk::IconSize::Menu,
+    )));
+    nav_btn.set_tooltip_text(Some("Toggle URL / Search Bar (Ctrl+G)"));
+    hb.pack_start(&nav_btn);
+
     let reload_btn = gtk::Button::with_label("🗲");
-    reload_btn.set_tooltip_text(Some("Hot Reload (Ctrl+R / F5)"));
+    reload_btn.set_tooltip_text(Some("Hot Reload / Page Reload (Ctrl+R / F5)"));
     hb.pack_end(&reload_btn);
 
     let restart_btn = gtk::Button::new();
@@ -406,7 +447,28 @@ fn main() {
     restart_btn.set_tooltip_text(Some("Hot Restart (Ctrl+Shift+R)"));
     hb.pack_end(&restart_btn);
 
+    // Compact Browser Navigation Bar (Back, Forward, URL/Search Entry)
+    let nav_box = GtkBox::new(gtk::Orientation::Horizontal, 2);
+    let back_btn = gtk::Button::new();
+    back_btn.set_image(Some(&gtk::Image::from_icon_name(
+        Some("go-previous-symbolic"),
+        gtk::IconSize::Menu,
+    )));
+    back_btn.set_tooltip_text(Some("Back (Alt+Left)"));
+    let fwd_btn = gtk::Button::new();
+    fwd_btn.set_image(Some(&gtk::Image::from_icon_name(
+        Some("go-next-symbolic"),
+        gtk::IconSize::Menu,
+    )));
+    fwd_btn.set_tooltip_text(Some("Forward (Alt+Right)"));
+    let url_entry = Entry::new();
+    url_entry.set_placeholder_text(Some("Enter URL (https://..., :3000) or search query..."));
+    nav_box.pack_start(&back_btn, false, false, 0);
+    nav_box.pack_start(&fwd_btn, false, false, 0);
+    nav_box.pack_start(&url_entry, true, true, 2);
+
     let vbox = GtkBox::new(gtk::Orientation::Vertical, 0);
+    vbox.pack_start(&nav_box, false, false, 0);
     vbox.pack_start(&webview, true, true, 0);
     window.add(&vbox);
 
@@ -414,15 +476,73 @@ fn main() {
     let stdin_slot: Arc<Mutex<Option<ChildStdin>>> = Arc::new(Mutex::new(None));
     let current_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-    // Hot reload
+    {
+        let wv_b = webview.clone();
+        back_btn.connect_clicked(move |_| {
+            wv_b.go_back();
+        });
+        let wv_f = webview.clone();
+        fwd_btn.connect_clicked(move |_| {
+            wv_f.go_forward();
+        });
+    }
+
+    {
+        let nav_b = nav_box.clone();
+        let entry_b = url_entry.clone();
+        nav_btn.connect_clicked(move |_| {
+            let vis = !nav_b.is_visible();
+            nav_b.set_visible(vis);
+            if vis {
+                entry_b.grab_focus();
+            }
+        });
+    }
+
+    {
+        let wv_u = webview.clone();
+        let cur_u = current_url.clone();
+        let prog_u = progress.clone();
+        url_entry.connect_activate(move |entry| {
+            let raw = entry.text();
+            let target = normalize_url(raw.as_str());
+            entry.set_text(&target);
+            *cur_u.lock().unwrap() = Some(target.clone());
+            prog_u.lock().unwrap().server_url = Some(target.clone());
+            wv_u.load_uri(&target);
+            print_tagged_event("NAV", CYAN, &target);
+        });
+    }
+
+    {
+        let entry_sync = url_entry.clone();
+        let cur_sync = current_url.clone();
+        let prog_sync = progress.clone();
+        webview.connect_uri_notify(move |wv| {
+            if let Some(uri) = wv.uri() {
+                let u = uri.to_string();
+                if u != "about:blank" {
+                    entry_sync.set_text(&u);
+                    *cur_sync.lock().unwrap() = Some(u.clone());
+                    prog_sync.lock().unwrap().server_url = Some(u);
+                }
+            }
+        });
+    }
+
+    // Hot reload (or page reload in Browser mode)
     {
         let stdin_r = stdin_slot.clone();
+        let wv_r = webview.clone();
         reload_btn.connect_clicked(move |_| {
             if let Some(stdin) = &mut *stdin_r.lock().unwrap() {
                 let _ = stdin.write_all(b"r\n");
                 let _ = stdin.flush();
+                print_tagged_event("HOT", CYAN, "reload");
+            } else {
+                wv_r.reload();
+                print_tagged_event("NAV", CYAN, "page reload");
             }
-            print_tagged_event("HOT", CYAN, "reload");
         });
     }
 
@@ -446,18 +566,21 @@ fn main() {
         });
     }
 
-    // Window keyboard accelerators (Ctrl+R/F5, Ctrl+Shift+R, Ctrl+S, Ctrl+I/F12, Ctrl+L, Ctrl+W, Ctrl+Q)
+    // Window keyboard accelerators (Ctrl+R/F5, Ctrl+Shift+R, Ctrl+G, Alt+Left/Right, Ctrl+S, Ctrl+I/F12, Ctrl+L, Ctrl+W, Ctrl+Q)
     {
         let reload_k = reload_btn.clone();
         let restart_k = restart_btn.clone();
+        let nav_k = nav_btn.clone();
         let shot_k = shot_btn.clone();
         let inspect_k = inspect_btn.clone();
         let rotate_k = rotate_btn.clone();
         let watch_k = watch_btn.clone();
+        let wv_k = webview.clone();
         window.connect_key_press_event(move |win, ev| {
             let state = ev.state();
             let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            let alt = state.contains(gtk::gdk::ModifierType::MOD1_MASK);
             let kv = ev.keyval();
 
             if kv == gtk::gdk::keys::constants::F5 {
@@ -468,6 +591,16 @@ fn main() {
                 inspect_k.clicked();
                 return glib::Propagation::Stop;
             }
+            if alt {
+                if kv == gtk::gdk::keys::constants::Left {
+                    wv_k.go_back();
+                    return glib::Propagation::Stop;
+                }
+                if kv == gtk::gdk::keys::constants::Right {
+                    wv_k.go_forward();
+                    return glib::Propagation::Stop;
+                }
+            }
             if ctrl {
                 if let Some(ch) = kv.to_unicode().map(|c| c.to_ascii_lowercase()) {
                     match ch {
@@ -477,6 +610,10 @@ fn main() {
                         }
                         'r' => {
                             reload_k.clicked();
+                            return glib::Propagation::Stop;
+                        }
+                        'g' => {
+                            nav_k.clicked();
                             return glib::Propagation::Stop;
                         }
                         's' => {
@@ -526,7 +663,10 @@ fn main() {
     });
 
     window.show_all();
-    watcher::spawn_dart_watcher(watch_enabled.clone(), stdin_slot.clone());
+    nav_box.set_visible(browser_mode);
+    if !browser_mode {
+        watcher::spawn_dart_watcher(watch_enabled.clone(), stdin_slot.clone());
+    }
 
     progress.lock().unwrap().finish_step(
         Step::GtkShell,
@@ -545,6 +685,7 @@ fn main() {
         let pending_ipc = pending_js_replies.clone();
         let next_id_ipc = next_js_req_id.clone();
         let watch_ipc = watch_enabled.clone();
+        let entry_ipc = url_entry.clone();
 
         IPC_DISPATCHER.with(|cell| {
             *cell.borrow_mut() = Some(Box::new(move || {
@@ -598,10 +739,43 @@ fn main() {
                             );
                             j_obj([("ok", j_bool(true)), ("auto_watch", j_bool(next))])
                         }
+                        IpcCommand::Navigate { url, nav } => {
+                            if let Some(nav_cmd) = nav {
+                                match nav_cmd.to_ascii_lowercase().as_str() {
+                                    "back" => wv_ipc.go_back(),
+                                    "forward" => wv_ipc.go_forward(),
+                                    "reload" => wv_ipc.reload(),
+                                    _ => {}
+                                }
+                            }
+                            let mut loaded_url = None;
+                            if let Some(raw_u) = url {
+                                let target = normalize_url(&raw_u);
+                                entry_ipc.set_text(&target);
+                                *url_ipc.lock().unwrap() = Some(target.clone());
+                                prog_ipc.lock().unwrap().server_url = Some(target.clone());
+                                wv_ipc.load_uri(&target);
+                                print_tagged_event("NAV", CYAN, &format!("{} (mcp)", target));
+                                loaded_url = Some(target);
+                            }
+                            j_obj([
+                                ("ok", j_bool(true)),
+                                (
+                                    "url",
+                                    j_str(
+                                        loaded_url
+                                            .or_else(|| url_ipc.lock().unwrap().clone())
+                                            .unwrap_or_default(),
+                                    ),
+                                ),
+                            ])
+                        }
                         IpcCommand::HotReload => {
                             if let Some(stdin) = &mut *stdin_ipc.lock().unwrap() {
                                 let _ = stdin.write_all(b"r\n");
                                 let _ = stdin.flush();
+                            } else {
+                                wv_ipc.reload();
                             }
                             print_tagged_event("HOT", CYAN, "reload (mcp)");
                             j_obj([("ok", j_bool(true)), ("action", j_str("hot_reload"))])
@@ -775,45 +949,69 @@ fn main() {
         });
     });
 
-    let (url_tx, url_rx) = mpsc::channel::<String>();
-    {
-        let current_url_clone = current_url.clone();
-        let wv_load = webview.clone();
-        URL_DISPATCHER.with(|cell| {
-            *cell.borrow_mut() = Some(Box::new(move || {
-                if let Ok(url) = url_rx.try_recv() {
-                    *current_url_clone.lock().unwrap() = Some(url.clone());
-                    wv_load.load_uri(&url);
-                    trim_process_heap();
-                }
-            }));
+    if let Some(initial_url) = cfg.url {
+        url_entry.set_text(&initial_url);
+        *current_url.lock().unwrap() = Some(initial_url.clone());
+        {
+            let mut pr = progress.lock().unwrap();
+            pr.server_url = Some(initial_url.clone());
+            pr.settled = Some(true);
+        }
+        webview.load_uri(&initial_url);
+        sync_webview_pointer_mode(&webview, width);
+        print_tagged_event(
+            "NAV",
+            GREEN,
+            &format!(
+                "browser ready in {:.2}s → {}",
+                started.elapsed().as_secs_f32(),
+                initial_url
+            ),
+        );
+        trim_process_heap();
+    } else {
+        let (url_tx, url_rx) = mpsc::channel::<String>();
+        {
+            let current_url_clone = current_url.clone();
+            let wv_load = webview.clone();
+            let entry_load = url_entry.clone();
+            URL_DISPATCHER.with(|cell| {
+                *cell.borrow_mut() = Some(Box::new(move || {
+                    if let Ok(url) = url_rx.try_recv() {
+                        entry_load.set_text(&url);
+                        *current_url_clone.lock().unwrap() = Some(url.clone());
+                        wv_load.load_uri(&url);
+                        trim_process_heap();
+                    }
+                }));
+            });
+        }
+
+        let c_slot = child_slot.clone();
+        let s_slot = stdin_slot.clone();
+        let prog_fl = progress.clone();
+        let port = cfg.port;
+        spawn_compact_thread("ff-flutter", move || {
+            run_flutter(
+                flutter_cmd,
+                port,
+                url_tx,
+                || {
+                    glib::idle_add(|| {
+                        URL_DISPATCHER.with(|cell| {
+                            if let Some(dispatch) = cell.borrow_mut().as_mut() {
+                                dispatch();
+                            }
+                        });
+                        glib::ControlFlow::Break
+                    });
+                },
+                c_slot,
+                s_slot,
+                prog_fl,
+            );
         });
     }
-
-    let c_slot = child_slot.clone();
-    let s_slot = stdin_slot.clone();
-    let prog_fl = progress.clone();
-    let port = cfg.port;
-    spawn_compact_thread("ff-flutter", move || {
-        run_flutter(
-            flutter_cmd,
-            port,
-            url_tx,
-            || {
-                glib::idle_add(|| {
-                    URL_DISPATCHER.with(|cell| {
-                        if let Some(dispatch) = cell.borrow_mut().as_mut() {
-                            dispatch();
-                        }
-                    });
-                    glib::ControlFlow::Break
-                });
-            },
-            c_slot,
-            s_slot,
-            prog_fl,
-        );
-    });
 
     gtk::main();
 }

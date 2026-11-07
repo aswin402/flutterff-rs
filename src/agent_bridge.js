@@ -119,6 +119,7 @@
     pointerMode: "auto", // "auto" | "cursor" | "touch"
     inspectVisible: false,
     selectorMap: [],
+    prevSnapshot: null,
     cursorX: 180,
     cursorY: 320,
     maskRoot: null,
@@ -521,6 +522,158 @@
       : out;
   }
 
+  function snapshotItemKey(it) {
+    return it.role + "|" + collapseWhitespace(it.label || "");
+  }
+
+  function computeUiDiff(items) {
+    var prev = state.prevSnapshot;
+    var nextMap = {};
+    var nextList = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var key = snapshotItemKey(it) + "#" + i;
+      var baseKey = snapshotItemKey(it);
+      var entry = {
+        index: it.index,
+        role: it.role,
+        label: collapseWhitespace(it.label || ""),
+        value: it.value || "",
+        overflow: Boolean(it.overflow),
+        center_x: it.center_x,
+        center_y: it.center_y,
+        baseKey: baseKey
+      };
+      nextMap[key] = entry;
+      nextList.push(entry);
+    }
+    state.prevSnapshot = nextList;
+
+    if (!prev) {
+      return {
+        has_baseline: false,
+        added: nextList.length,
+        changed: 0,
+        removed: 0,
+        summary: formatUiTreeText(items, true, 2000)
+      };
+    }
+
+    var prevByBase = {};
+    for (var p = 0; p < prev.length; p++) {
+      var pe = prev[p];
+      if (!prevByBase[pe.baseKey]) prevByBase[pe.baseKey] = [];
+      prevByBase[pe.baseKey].push(pe);
+    }
+
+    var addedLines = [];
+    var changedLines = [];
+    var matchedPrev = {};
+
+    for (var j = 0; j < nextList.length; j++) {
+      var cur = nextList[j];
+      var candidates = prevByBase[cur.baseKey];
+      var matched = null;
+      if (candidates) {
+        for (var c = 0; c < candidates.length; c++) {
+          var cand = candidates[c];
+          if (!matchedPrev[cand.index]) {
+            matched = cand;
+            matchedPrev[cand.index] = true;
+            break;
+          }
+        }
+      }
+      var lbl = cur.label ? ' "' + cur.label + '"' : "";
+      var val = cur.value ? ' val="' + cur.value + '"' : "";
+      var ovr = cur.overflow ? " [OVERFLOW]" : "";
+      if (!matched) {
+        addedLines.push(
+          "[+] [" +
+            cur.index +
+            "] [" +
+            cur.role +
+            "]" +
+            lbl +
+            val +
+            " @(" +
+            cur.center_x +
+            ", " +
+            cur.center_y +
+            ")" +
+            ovr
+        );
+      } else if (matched.value !== cur.value || matched.overflow !== cur.overflow) {
+        changedLines.push(
+          "[~] [" +
+            cur.index +
+            "] [" +
+            cur.role +
+            "]" +
+            lbl +
+            ' val="' +
+            matched.value +
+            '" -> "' +
+            cur.value +
+            '"' +
+            ovr
+        );
+      }
+    }
+
+    var removedLines = [];
+    for (var r = 0; r < prev.length; r++) {
+      var oldIt = prev[r];
+      if (!matchedPrev[oldIt.index]) {
+        var rLbl = oldIt.label ? ' "' + oldIt.label + '"' : "";
+        removedLines.push("[-] [" + oldIt.role + "]" + rLbl);
+      }
+    }
+
+    var diffLines = [
+      "UI Diff: +" +
+        addedLines.length +
+        " added, ~" +
+        changedLines.length +
+        " changed, -" +
+        removedLines.length +
+        " removed (total=" +
+        nextList.length +
+        ")"
+    ]
+      .concat(addedLines)
+      .concat(changedLines)
+      .concat(removedLines);
+
+    return {
+      has_baseline: true,
+      added: addedLines.length,
+      changed: changedLines.length,
+      removed: removedLines.length,
+      summary: diffLines.join("\n")
+    };
+  }
+
+  function filterUiItems(items, query, roleFilter) {
+    var q = typeof query === "string" ? query.trim().toLowerCase() : "";
+    var r = typeof roleFilter === "string" ? roleFilter.trim().toLowerCase() : "";
+    if (!q && !r) return items;
+    var filtered = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var roleMatch = !r || (it.role || "").toLowerCase().indexOf(r) !== -1;
+      var queryMatch =
+        !q ||
+        ((it.label || "") + " " + (it.value || "") + " " + (it.role || ""))
+          .toLowerCase()
+          .indexOf(q) !== -1;
+      if (roleMatch && queryMatch) {
+        filtered.push(it);
+      }
+    }
+    return filtered;
+  }
+
   // 5. Target Resolution (By Index, By Label/Text, or By Coordinates with Stale-Node Auto-Refresh)
   function findByText(needle) {
     for (var i = 0; i < state.selectorMap.length; i++) {
@@ -760,8 +913,10 @@
         if (typeof payload.overlay === "boolean") {
           state.inspectVisible = payload.overlay;
         }
-        var items = buildUiTree(Boolean(payload.include_static));
+        var allItems = buildUiTree(Boolean(payload.include_static));
         renderInspectorBoxes();
+        var diffInfo = computeUiDiff(allItems);
+        var items = filterUiItems(allItems, payload.query, payload.role);
         var overflowCount = 0;
         var cleanItems = items.map(function (it) {
           if (it.overflow) overflowCount++;
@@ -779,13 +934,21 @@
             center_y: it.center_y
           };
         });
+        var summaryText =
+          payload.diff && diffInfo.has_baseline
+            ? diffInfo.summary
+            : formatUiTreeText(items, semActive, payload.max_chars);
         sendMcpReply(reqId, {
           ok: true,
           pointer_mode: effectivePointerMode(),
           semantics_active: semActive,
           count: cleanItems.length,
+          total_elements: allItems.length,
           overflow_count: overflowCount,
-          summary: formatUiTreeText(items, semActive, payload.max_chars),
+          diff_added: diffInfo.added,
+          diff_changed: diffInfo.changed,
+          diff_removed: diffInfo.removed,
+          summary: summaryText,
           elements: cleanItems
         });
       });
@@ -798,7 +961,7 @@
           sendMcpReply(reqId, { ok: false, error: "'fields' must be a non-empty array" });
           return;
         }
-        buildUiTree(true);
+        computeUiDiff(buildUiTree(true));
         var filledCount = 0;
         var errors = [];
         var stepIdx = 0;
@@ -817,15 +980,19 @@
                 errors.push(sub.error);
               }
             }
-            sendMcpReply(reqId, {
-              ok: errors.length === 0,
-              action: "fill_form",
-              filled: filledCount,
-              submitted: Boolean(
-                typeof payload.submit_index === "number" || typeof payload.submit_text === "string"
-              ),
-              errors: errors
-            });
+            setTimeout(function () {
+              var postDiff = computeUiDiff(buildUiTree(true));
+              sendMcpReply(reqId, {
+                ok: errors.length === 0,
+                action: "fill_form",
+                filled: filledCount,
+                submitted: Boolean(
+                  typeof payload.submit_index === "number" || typeof payload.submit_text === "string"
+                ),
+                ui_diff: postDiff.summary,
+                errors: errors
+              });
+            }, 65);
             return;
           }
 
@@ -934,6 +1101,7 @@
 
     tap: function (reqId, payload) {
       ensureFlutterSemantics(function () {
+        computeUiDiff(buildUiTree(true));
         var resolved = resolveTarget(payload);
         if (resolved.error) {
           sendMcpReply(reqId, { ok: false, error: resolved.error });
@@ -941,21 +1109,27 @@
         }
         showPointerInteraction(resolved.x, resolved.y);
         dispatchTapSequence(resolved.x, resolved.y, resolved.item);
-        sendMcpReply(reqId, {
-          ok: true,
-          action: "tap",
-          pointer_mode: effectivePointerMode(),
-          x: resolved.x,
-          y: resolved.y,
-          target: resolved.item
-            ? "[" + resolved.item.index + "] " + resolved.item.role + " " + resolved.item.label
-            : "coords"
-        });
+        var targetDesc = resolved.item
+          ? "[" + resolved.item.index + "] " + resolved.item.role + " " + resolved.item.label
+          : "coords";
+        setTimeout(function () {
+          var postDiff = computeUiDiff(buildUiTree(true));
+          sendMcpReply(reqId, {
+            ok: true,
+            action: "tap",
+            pointer_mode: effectivePointerMode(),
+            x: resolved.x,
+            y: resolved.y,
+            target: targetDesc,
+            ui_diff: postDiff.summary
+          });
+        }, 60);
       });
     },
 
     type_text: function (reqId, payload) {
       ensureFlutterSemantics(function () {
+        computeUiDiff(buildUiTree(true));
         var resolvedItem = null;
         var doType = function () {
           var inputEl =
@@ -973,13 +1147,17 @@
           if (payload.submit) {
             dispatchKey(inputEl, "Enter");
           }
-          sendMcpReply(reqId, {
-            ok: true,
-            action: "type_text",
-            pointer_mode: effectivePointerMode(),
-            typed: payload.text || "",
-            submitted: Boolean(payload.submit)
-          });
+          setTimeout(function () {
+            var postDiff = computeUiDiff(buildUiTree(true));
+            sendMcpReply(reqId, {
+              ok: true,
+              action: "type_text",
+              pointer_mode: effectivePointerMode(),
+              typed: payload.text || "",
+              submitted: Boolean(payload.submit),
+              ui_diff: postDiff.summary
+            });
+          }, 55);
         };
 
         if (typeof payload.index === "number" || typeof payload.target_text === "string") {

@@ -7,7 +7,7 @@
 **A lightweight, terminal-first Flutter Web development launcher & native mobile simulator for Linux.**  
 *Native GTK3 + WebKit2GTK viewport · 24-bit `cargo-pretty` live terminal TUI · Zero Chrome overhead.*
 
-[![Version](https://img.shields.io/badge/version-2.5.5-00E5FF?style=flat-square&labelColor=1E1E2E)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.5.6-00E5FF?style=flat-square&labelColor=1E1E2E)](CHANGELOG.md)
 [![Rust Edition](https://img.shields.io/badge/rust-2024%20(1.99%2B)-027DFD?style=flat-square&logo=rust&logoColor=white&labelColor=1E1E2E)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-linux%20(X11%20%2F%20Wayland)-50FA7B?style=flat-square&logo=linux&logoColor=white&labelColor=1E1E2E)](#)
 [![Design System](https://img.shields.io/badge/DESIGN.md-awesome--design--md-72EFDD?style=flat-square&labelColor=1E1E2E)](DESIGN.md)
@@ -19,16 +19,18 @@
 
 ## ⚡ Why `flutterff-rs`?
 
-Launching a full Chromium instance or Android Emulator for Flutter UI iteration consumes gigabytes of RAM and clutters your workspace with browser chrome. **`flutterff-rs`** orchestrates `flutter run -d web-server` in a background thread and renders your app inside a minimal, chromeless **GTK3 + WebKit2GTK** window tailored to mobile, tablet, and desktop presets—paired with a 20 FPS **[`cargo-pretty`](https://github.com/romancitodev/cargo-pretty)**-style terminal UI and a **19-tool native Rust MCP server**.
+Launching a full Chromium instance or Android Emulator for Flutter UI iteration consumes gigabytes of RAM and clutters your workspace with browser chrome. **`flutterff-rs`** orchestrates `flutter run -d web-server` in a background thread (or opens any live URL / local web app in **~80ms** via `--url`) inside a minimal, chromeless **GTK3 + WebKit2GTK** window tailored to mobile, tablet, and desktop presets—paired with a 20 FPS **[`cargo-pretty`](https://github.com/romancitodev/cargo-pretty)**-style terminal UI and a **20-tool native Rust MCP server**.
 
-| Capability | Chrome / Standard Web | `flutterff-rs` v2.5.5 |
+| Capability | Chrome / Standard Web | `flutterff-rs` v2.5.6 |
 | :--- | :--- | :--- |
-| **Memory Footprint** | 800 MB – 2.5 GB+ | **~52.7 MB total private RAM (`6.0 MB` Rust shell + `18.0 MB` WebProcess)** |
+| **Memory Footprint** | 800 MB – 2.5 GB+ | **~29–52 MB total private RAM (`MemoryPressureSettings` + JSC `forceRAMSize` + `DocumentViewer`)** |
 | **Idle CPU Usage** | 1% – 5% background timers | **`0.00%` CPU when idle (`glib::idle_add` + blocking `inotify`)** |
-| **Binary Size** | 350 MB+ Chromium | **`669 KB` stripped single binary (`opt-level = "s"`, `lto = "fat"`)** |
-| **Window Chrome** | Tabs, omnibox, bookmarks bar | **Single minimal GTK3 `HeaderBar` (`menu:close`) + `Ctrl+R`/`F5` shortcuts** |
+| **Binary Size** | 350 MB+ Chromium | **`702 KB` stripped single binary (`opt-level = "s"`, `lto = "fat"`)** |
+| **Universal `--url` Mode** | Slow cold start | **Opens any website, `:3000` dev server, or search query in `~80ms`** |
+| **Window Chrome** | Tabs, omnibox, bookmarks bar | **Single minimal GTK3 `HeaderBar` (`menu:close`) + `Ctrl+G` toggleable URL bar** |
 | **Auto Hot Reload** | Manual `r` in terminal | **Zero-polling Linux `inotify` watcher auto-reloads on `lib/*.dart` save** |
 | **Device & Orientation** | Open DevTools → Responsive mode | **1-click preset popup + 1-click Portrait ↔ Landscape Rotate (`Ctrl+L`)** |
+| **AI Agent Perception** | Raw 100k-token DOM dumps | ***Prune4Web* query filtering, Differential AXTree (`diff: true`), and *Set-of-Mark* (`annotated: true`)** |
 | **Layout Overflow Audit** | Manual resize & visual check | **`flutter_responsive_audit` MCP tool + red `#F38BA8` `[OVERFLOW]` badges** |
 | **Screenshots** | Manual crop / Wayland issues | **1-click Cairo `ARgb32` surface snapshot (`Ctrl+S`) → `screenshots/`** |
 | **Terminal Output** | Noisy DDC / bootstrap logs | **24-bit Truecolor `cargo-pretty` live TUI + filtered `INF`/`WRN`/`ERR`/`OVR` stream** |
@@ -158,11 +160,13 @@ Run `flutterff-rs` from the root of any Flutter project:
 
 ```bash
 flutterff-rs [OPTIONS]
+flutterff-rs --url <URL|PORT|QUERY> [OPTIONS]
 ```
 
 | **Flag** | **Short** | **Description** |
 | :--- | :--- | :--- |
 | `--mcp` / `mcp` | | **Run as a native Model Context Protocol (MCP) JSON-RPC server over `stdio`.** |
+| `--url <URL\|QUERY>` | `-u` | **Instant Browser / Web App mode (opens any URL, `:3000`, or search query in `~80ms`).** |
 | `--size <PRESET\|WxH>` | `-s` | Set viewport size (`mobile`, `mobile-small`, `iphone`, `tablet`, `desktop`, or `WxH` e.g. `430x932`). |
 | `--landscape` | `-l` | Start the viewport in landscape orientation (swaps `W×H`). |
 | `--port <PORT>` | `-p` | Set starting `web-server` HTTP port (default: `8080`, auto-increments if busy). |
@@ -172,15 +176,17 @@ flutterff-rs [OPTIONS]
 | `--no-watch` | | Disable automatic Linux `inotify` Hot Reload on `lib/*.dart` file save. |
 | `--no-hot` | | Disable hot reload support. |
 | `--list-sizes` | | Display all built-in device size presets and dimensions. |
-| `--version` | `-V` | Print `flutterff-rs` version (`v2.5.5`). |
+| `--version` | `-V` | Print `flutterff-rs` version (`v2.5.6`). |
 | `--help` | `-h` | Print CLI help information. |
 
 ### Window Keyboard Accelerators (GUI)
 
 | Shortcut | Header Button | Action |
 | :--- | :--- | :--- |
-| **`Ctrl+R` / `F5`** | `🗲` | Instant Hot Reload (`r`) |
+| **`Ctrl+R` / `F5`** | `🗲` | Instant Hot Reload (`r`) or Page Reload |
 | **`Ctrl+Shift+R`** | `🔄` (`view-refresh-symbolic`) | Crash-safe WebView Hot Restart |
+| **`Ctrl+G`** | `🌐` (`applications-internet-symbolic`) | Toggle URL / Search Bar (`Back`, `Forward`, `Entry`) |
+| **`Alt+Left` / `Alt+Right`** | `←` / `→` | Navigate Back / Forward in browser history |
 | **`Ctrl+S`** | `📷` (`camera-photo-symbolic`) | Capture Cairo PNG Screenshot (`screenshots/`) |
 | **`Ctrl+I` / `F12`** | `🎯` (`find-location-symbolic`) | Toggle `[0], [1]...` UI Semantics Inspector Overlay |
 | **`Ctrl+L`** | `🔃` (`object-rotate-right-symbolic`) | Rotate Portrait ↔ Landscape (`W×H` ↔ `H×W`) |
@@ -206,16 +212,17 @@ flutterff-rs [OPTIONS]
 }
 ```
 
-### Exposed MCP Tools (19 Tools) & Resources (5 Resources)
+### Exposed MCP Tools (20 Tools) & Resources (5 Resources)
 
 | MCP Tool / Resource | Description |
 | :--- | :--- |
 | **`flutter_status`** | Returns live JSON status (running state, URL, port, window size, `orientation`, `pointer_mode`, `auto_watch`, `overflow_count`, `overflows`, mode, log count). |
-| **`flutter_launch`** | Spawns a new `flutterff-rs` simulator window (`project_dir`, `size`, `landscape`, `watch`, `port`, `offline`, `profile`, `flavor`). |
-| **`flutter_ui_tree`** | **[`page-agent`](https://github.com/alibaba/page-agent) & [`obscura`](https://github.com/h4ckf0r0day/obscura)-style Semantics & DOM Inspector**: Auto-enables Flutter Web semantics and returns indexed interactive widgets (`[0]`, `[1]`, `[2]...`) with roles, labels, values, `[OVERFLOW]` badges, `(x, y)` coordinates, and token budgeting (`max_chars`). |
-| **`flutter_tap`** | Taps/clicks a Flutter widget by **`index`** (`[0]`), **`text`/label** (`"Sign In"`), or **`(x, y)` coordinates** with automatic stale-node refresh. Uses a **Red-Orange Mobile Touch Dot (`●`) + touch events** on mobile/tablet viewports and a **Red-Orange `Bibata-Modern-Ice` Desktop Cursor (`↖`) + mouse events** on desktop viewports. |
-| **`flutter_type`** | Types text into a Flutter `TextField` or input (`text`, optional `index` or `target_text` to tap/focus first, `clear`, and `submit`). |
-| **`flutter_fill_form`** | **[`obscura`](https://github.com/h4ckf0r0day/obscura)-style Multi-Field Form Filler**: Fills multiple Flutter `TextField`s/inputs and optionally taps a submit button in **one MCP call** (`fields`, `submit_index`, `submit_text`). |
+| **`flutter_launch`** | Spawns a new `flutterff-rs` simulator or instant browser window (`project_dir`, `url`, `size`, `landscape`, `watch`, `port`, `offline`, `profile`, `flavor`). |
+| **`flutter_navigate`** | Navigates the live WebView to any URL (`https://...`, `:3000`, search query) or triggers browser history actions (`nav: "back" \| "forward" \| "reload"`). |
+| **`flutter_ui_tree`** | **[`page-agent`](https://github.com/alibaba/page-agent), [`obscura`](https://github.com/h4ckf0r0day/obscura) & *Prune4Web* Semantics Inspector**: Auto-enables Flutter Web semantics and returns indexed interactive widgets (`[0]`, `[1]`, `[2]...`) with roles, labels, values, `[OVERFLOW]` badges, `(x, y)` coordinates, **differential snapshots (`diff: true`)**, **programmatic filtering (`query`, `role`)**, and token budgeting (`max_chars`). |
+| **`flutter_tap`** | Taps/clicks a Flutter or DOM widget by **`index`** (`[0]`), **`text`/label** (`"Sign In"`), or **`(x, y)` coordinates** with automatic stale-node refresh and bundled **`ui_diff`**. Uses a **Red-Orange Mobile Touch Dot (`●`) + touch events** on mobile/tablet viewports and a **Red-Orange `Bibata-Modern-Ice` Desktop Cursor (`↖`) + mouse events** on desktop viewports. |
+| **`flutter_type`** | Types text into a Flutter `TextField` or input (`text`, optional `index` or `target_text` to tap/focus first, `clear`, and `submit`) and returns bundled **`ui_diff`**. |
+| **`flutter_fill_form`** | **[`obscura`](https://github.com/h4ckf0r0day/obscura)-style Multi-Field Form Filler**: Fills multiple Flutter `TextField`s/inputs and optionally taps a submit button in **one MCP call** (`fields`, `submit_index`, `submit_text`) with bundled **`ui_diff`**. |
 | **`flutter_wait_for`** | **[`obscura`](https://github.com/h4ckf0r0day/obscura)-style Smart Wait**: Waits until a widget label/text or role appears (or disappears with `gone: true`) within `timeout_ms`. |
 | **`flutter_network`** | **[`obscura`](https://github.com/h4ckf0r0day/obscura)-style Network Inspector**: Returns recent `fetch` & `XMLHttpRequest` API calls (`method`, `url`, `status`, `duration_ms`, `ok`, `error`). |
 | **`flutter_responsive_audit`** | **Automated Multi-Preset Overflow Auditor**: Steps through all 5 viewport presets (`mobile-small`, `iphone`, `mobile`, `tablet`, `desktop`), checks for Flutter `RenderFlex overflowed` errors and horizontally clipped interactive widgets at each size, and restores the original viewport. |
@@ -225,7 +232,7 @@ flutterff-rs [OPTIONS]
 | **`flutter_hot_reload`** | Injects `'r'` into the running Flutter daemon for instant Hot Reload, or toggles the `inotify` `.dart` watcher via `auto_watch: true/false`. |
 | **`flutter_hot_restart`** | Triggers a crash-safe WebView Hot Restart. |
 | **`flutter_resize`** | Dynamically resizes or rotates the GTK window (`mobile`, `iphone`, `tablet`, `desktop`, custom `WxH`, or `"rotate"`, `"landscape"`, `"portrait"`) and auto-switches `pointer_mode`. |
-| **`flutter_screenshot`** | Captures a native Cairo `ARgb32` PNG snapshot (`screenshots/screenshot_*.png`) and returns inline base64 `image/png` content. |
+| **`flutter_screenshot`** | Captures a native Cairo `ARgb32` PNG snapshot (`screenshots/screenshot_*.png`) and returns inline base64 `image/png` content. Pass **`annotated: true`** for atomic *Set-of-Mark* (`[0]`, `[1]...`) annotated screenshots. |
 | **`flutter_logs`** | Reads recent filtered Flutter & WebView logs (`INF`, `WRN`, `ERR`, `OVR`, `DBG`) with optional `limit`, `level`, and `clear`. |
 | **`flutter_eval_js`** | Evaluates arbitrary JavaScript inside the live WebKit2 WebView and returns the evaluated result synchronously. |
 | **`flutter_stop`** | Gracefully stops the Flutter daemon (`'q'`) and closes the simulator window. |
@@ -245,7 +252,7 @@ flutterff-rs [OPTIONS]
 
 ## 📂 Repository Layout
 
-- **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.5`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5` — zero `regex` or `chrono` dependency).
+- **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.6`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5` — zero `regex` or `chrono` dependency).
 - **[`.cargo/config.toml`](.cargo/config.toml)** — Enforces single-job (`jobs = 1` / `-j 1`) Cargo builds and checks.
 - **[`src/main.rs`](src/main.rs)** — GTK3 + WebKit2 simulator window orchestration, RAM diet (`JavaScriptCoreUseBMalloc=0`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, `MALLOC_ARENA_MAX=2`, `malloc_trim`), keyboard accelerators, and runtime event loop.
 - **[`src/config.rs`](src/config.rs)** — Runtime constants, device viewport presets (`DEVICE_PRESETS`), orientation & pointer mode helpers, `spawn_compact_thread`, and CLI argument parser.

@@ -78,6 +78,30 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
                 desc: "Enable automatic inotify Hot Reload when lib/*.dart files are saved (default: true).",
                 required: false,
             },
+            ToolParamSpec {
+                name: "url",
+                kind: "string",
+                desc: "Optional URL, localhost port (:3000), or search query for instant ~80ms Web App / Browser mode (skips flutter run).",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
+        name: "flutter_navigate",
+        desc: "Navigate the live WebView to any URL (http://localhost:3000, https://..., or search query) or trigger browser history actions ('back', 'forward', 'reload').",
+        params: &[
+            ToolParamSpec {
+                name: "url",
+                kind: "string",
+                desc: "Target URL, domain, :port, or search query to load.",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "nav",
+                kind: "string",
+                desc: "Optional history navigation action: 'back', 'forward', or 'reload'.",
+                required: false,
+            },
         ],
     },
     ToolSpec {
@@ -112,17 +136,25 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "flutter_screenshot",
-        desc: "Capture a native Cairo PNG screenshot of the live Flutter WebView, saving it to screenshots/ and optionally returning inline base64 image data.",
-        params: &[ToolParamSpec {
-            name: "include_image",
-            kind: "boolean",
-            desc: "Include inline base64 image/png content in the tool response (default: true).",
-            required: false,
-        }],
+        desc: "Capture a native Cairo PNG screenshot of the live Flutter WebView, saving it to screenshots/ and optionally returning inline base64 image data. Pass 'annotated: true' for Set-of-Mark ([0], [1]...) visual grounding badges.",
+        params: &[
+            ToolParamSpec {
+                name: "include_image",
+                kind: "boolean",
+                desc: "Include inline base64 image/png content in the tool response (default: true).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "annotated",
+                kind: "boolean",
+                desc: "Render Set-of-Mark ([0], [1]...) and [OVERFLOW] bounding-box badges onto the screenshot before capturing (default: false).",
+                required: false,
+            },
+        ],
     },
     ToolSpec {
         name: "flutter_logs",
-        desc: "Read recent formatted Flutter and WebView runtime logs (INF, WRN, ERR, DBG).",
+        desc: "Read recent formatted Flutter and WebView runtime logs (INF, WRN, ERR, OVR, DBG).",
         params: &[
             ToolParamSpec {
                 name: "limit",
@@ -133,7 +165,7 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
             ToolParamSpec {
                 name: "level",
                 kind: "string",
-                desc: "Optional filter by log tag (ERR, WRN, INF, DBG, HOT, WIN, SCR).",
+                desc: "Optional filter by log tag (ERR, WRN, OVR, INF, DBG, HOT, WIN, SCR).",
                 required: false,
             },
             ToolParamSpec {
@@ -146,12 +178,30 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "flutter_ui_tree",
-        desc: "Inspect the live Flutter Semantics & DOM UI tree (page-agent & obscura style). Auto-enables Flutter Web semantics and returns indexed interactive widgets ([0], [1], [2]...) with roles, labels, values, bounding-box coordinates, and active pointer mode.",
+        desc: "Inspect the live Flutter Semantics & DOM UI tree (page-agent, obscura & Prune4Web style). Auto-enables Flutter Web semantics and returns indexed interactive widgets ([0], [1], [2]...) with roles, labels, values, bounding-box coordinates, and active pointer mode.",
         params: &[
             ToolParamSpec {
                 name: "include_static",
                 kind: "boolean",
                 desc: "Include static text/label semantics nodes in addition to interactive widgets (default: false).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "diff",
+                kind: "boolean",
+                desc: "Return only the differential AXTree changes (+added, ~changed, -removed) since the last snapshot to save 5x-10x tokens (default: false).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "query",
+                kind: "string",
+                desc: "Programmatic Prune4Web filter: only return elements whose label, value, or role matches this substring (preserves true [index] numbers).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "role",
+                kind: "string",
+                desc: "Programmatic filter by widget role (e.g. 'button', 'textfield', 'link', 'checkbox').",
                 required: false,
             },
             ToolParamSpec {

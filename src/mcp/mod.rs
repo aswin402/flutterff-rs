@@ -187,6 +187,27 @@ fn handle_tool_call(req_id: JsonVal, params: &JsonVal) -> JsonVal {
             ),
         },
         "flutter_launch" => handle_launch_tool(&args),
+        "flutter_navigate" => {
+            let mut fields = Vec::new();
+            if let Some(u) = args.get("url").and_then(JsonVal::as_str)
+                && !u.is_empty()
+            {
+                fields.push(("url", j_str(u)));
+            }
+            if let Some(n) = args.get("nav").and_then(JsonVal::as_str)
+                && !n.is_empty()
+            {
+                fields.push(("nav", j_str(n)));
+            }
+            if fields.is_empty() {
+                tool_text_result(
+                    "Provide 'url' or 'nav' ('back' | 'forward' | 'reload')",
+                    true,
+                )
+            } else {
+                forward_ipc_action("navigate", fields)
+            }
+        }
         "flutter_hot_reload" => {
             if let Some(enabled) = args.get("auto_watch").and_then(JsonVal::as_bool) {
                 forward_ipc_action("toggle_watch", vec![("enabled", j_bool(enabled))])
@@ -209,7 +230,25 @@ fn handle_tool_call(req_id: JsonVal, params: &JsonVal) -> JsonVal {
                 .get("include_image")
                 .and_then(JsonVal::as_bool)
                 .unwrap_or(true);
-            match send_ipc(j_obj([("action", j_str("screenshot"))])) {
+            let annotated = args
+                .get("annotated")
+                .and_then(JsonVal::as_bool)
+                .unwrap_or(false);
+            if annotated {
+                let _ = send_ipc(j_obj([
+                    ("action", j_str("inspect_overlay")),
+                    ("enabled", j_bool(true)),
+                ]));
+                thread::sleep(Duration::from_millis(85));
+            }
+            let shot_res = send_ipc(j_obj([("action", j_str("screenshot"))]));
+            if annotated {
+                let _ = send_ipc(j_obj([
+                    ("action", j_str("inspect_overlay")),
+                    ("enabled", j_bool(false)),
+                ]));
+            }
+            match shot_res {
                 Ok(resp) => {
                     if !resp.get("ok").and_then(JsonVal::as_bool).unwrap_or(false) {
                         return rpc_ok(req_id, tool_text_result(resp.to_json(), true));
@@ -287,7 +326,7 @@ fn handle_launch_tool(args: &JsonVal) -> JsonVal {
     if let Some(dir) = args.get("project_dir").and_then(JsonVal::as_str) {
         cmd.current_dir(dir);
     }
-    for (key, flag) in [("size", "--size"), ("flavor", "--flavor")] {
+    for (key, flag) in [("size", "--size"), ("flavor", "--flavor"), ("url", "--url")] {
         if let Some(val) = args.get(key).and_then(JsonVal::as_str) {
             cmd.args([flag, val]);
         }

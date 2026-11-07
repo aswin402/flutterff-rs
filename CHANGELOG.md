@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [2.5.6] - 2026-11-08
+
+### ✨ Added
+- **Engine RAM Diet Phase 2 (`WebKitMemoryPressureSettings` + JSC MiniVM + Wasm Guard Cage Off + `G_SLICE=always-malloc`)**:
+  - Added [`build_low_memory_web_context()`](src/main.rs) applying `MemoryPressureSettings` (`128 MB` target limit, `0.30` conservative threshold, `0.55` strict threshold, `2.0s` poll interval) to both `WebsiteDataManager` (`WebKitNetworkProcess`) and `WebContext` (`WebKitWebProcess`), with `process_swap_on_cross_site_navigation_enabled(false)`, ephemeral `WebsiteDataManager`, and `set_web_process_count_limit(1)`.
+  - Tuned JavaScriptCore and GLib via [`tune_allocator_env()`](src/main.rs): `G_SLICE=always-malloc`, `JSC_forceMiniVMMode=1`, `JSC_forceRAMSize=268435456` (`256 MB`), `JSC_useFTLJIT=0`, `JSC_useOMGJIT=0`, `JSC_useWasmFastMemory=0` (eliminating 4 GB Wasm virtual address reservations), and single-thread caps for DFG/Wasm/GC workers (`JSC_numberOfDFGCompilerThreads=1`, `JSC_numberOfWasmCompilerThreads=1`, `JSC_numberOfGCMarkers=1`).
+- **Research-Paper Agent Upgrades (*Prune4Web* Differential AXTree + *Set-of-Mark* Annotated Screenshots + Action-State Bundling)**:
+  - **Differential AXTree Snapshots (`flutter_ui_tree(diff: true)`)**: Computes `computeUiDiff` in [`src/agent_bridge.js`](src/agent_bridge.js), returning only added (`[+]`), modified (`[~]`), and removed (`[-]`) widgets since the previous snapshot (`diff_added`, `diff_changed`, `diff_removed`), reducing multi-step LLM token consumption by 5×–10×.
+  - **Programmatic *Prune4Web* Filtering (`flutter_ui_tree(query: "...", role: "...")`)**: Filters the UI tree by substring or role while preserving true `[index]` numbers so `flutter_tap(index)` always targets the exact element.
+  - **Atomic *Set-of-Mark* Annotated Screenshots (`flutter_screenshot(annotated: true)`)**: Automatically renders `[0], [1]...` and `[OVERFLOW]` visual grounding badges onto the WebView, captures the Cairo PNG snapshot, and restores the overlay in one tool call.
+  - **Post-Action UI Diff Bundling**: `flutter_tap`, `flutter_type`, and `flutter_fill_form` now automatically return a `ui_diff` field summarizing what changed in the UI after the action settled.
+- **Instant `--url <URL>` Universal Web App / Browser Mode (`~80ms` Launch) + `flutter_navigate` MCP Tool**:
+  - Pass `-u, --url <URL|PORT|QUERY>` (or a positional URL / `:3000` / search query) to launch `flutterff-rs` in **80ms** as an ultra-lightweight browser or web app testing shell (React, Next.js, Vite, Svelte, docs) without spawning `flutter run`.
+  - Added a toggleable GTK navigation bar (`Back` `Alt+Left`, `Forward` `Alt+Right`, URL/Search entry, toggled via `Ctrl+G` or the HeaderBar globe button) and the **`flutter_navigate`** MCP tool (`url`, `nav: "back" | "forward" | "reload"`).
+
+---
+
 ## [2.5.5] - 2026-11-08
 
 ### ✨ Added

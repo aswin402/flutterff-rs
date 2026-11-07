@@ -81,6 +81,39 @@ pub fn resolve_dimensions(size_str: &str) -> Result<(i32, i32, String), String> 
     }
 }
 
+pub fn normalize_url(raw: &str) -> String {
+    let s = raw.trim();
+    if s.is_empty() {
+        return "about:blank".to_string();
+    }
+    if s.starts_with("http://")
+        || s.starts_with("https://")
+        || s.starts_with("file://")
+        || s.starts_with("about:")
+        || s.starts_with("data:")
+    {
+        return s.to_string();
+    }
+    if let Some(port_part) = s.strip_prefix(':') {
+        return format!("http://localhost:{}", port_part);
+    }
+    if s.starts_with("localhost") || s.starts_with("127.0.0.1") || s.starts_with("0.0.0.0") {
+        return format!("http://{}", s);
+    }
+    if !s.contains(' ') && s.contains('.') {
+        return format!("https://{}", s);
+    }
+    let encoded: String = s
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            b' ' => "+".to_string(),
+            _ => format!("%{:02X}", b),
+        })
+        .collect();
+    format!("https://duckduckgo.com/?q={}", encoded)
+}
+
 pub enum CliAction {
     Run(CliConfig),
     McpServer,
@@ -98,6 +131,7 @@ pub struct CliConfig {
     pub offline: bool,
     pub flavor: Option<String>,
     pub size_str: String,
+    pub url: Option<String>,
 }
 
 impl CliConfig {
@@ -111,13 +145,14 @@ impl CliConfig {
             offline: false,
             flavor: None,
             size_str: DEFAULT_PRESET.to_string(),
+            url: None,
         };
 
         let mut iter = args.into_iter().skip(1);
         while let Some(arg) = iter.next() {
             let (flag, inline_val) = match arg.split_once('=') {
-                Some((k, v)) => (k, Some(v.to_string())),
-                None => (arg.as_str(), None),
+                Some((k, v)) if k.starts_with('-') => (k, Some(v.to_string())),
+                _ => (arg.as_str(), None),
             };
 
             let mut next_val = |flag_name: &str| -> Result<String, String> {
@@ -148,6 +183,15 @@ impl CliConfig {
                 }
                 "--size" | "-s" => cfg.size_str = next_val(flag)?,
                 "--flavor" => cfg.flavor = Some(next_val(flag)?),
+                "--url" | "-u" | "--browser" | "-b" => {
+                    let val = next_val(flag)?;
+                    cfg.url = Some(normalize_url(&val));
+                    cfg.watch = false;
+                }
+                other if !other.starts_with('-') && cfg.url.is_none() => {
+                    cfg.url = Some(normalize_url(other));
+                    cfg.watch = false;
+                }
                 other => return Err(format!("Unknown option '{}'. Run with --help.", other)),
             }
         }
@@ -163,12 +207,17 @@ pub fn print_help() {
     );
     println!("{}USAGE:{}", BOLD, RESET);
     println!("  {} [OPTIONS]", PKG_NAME);
+    println!("  {} --url <URL|PORT|QUERY> [OPTIONS]", PKG_NAME);
     println!("  {} --mcp\n", PKG_NAME);
     println!("{}OPTIONS:{}", BOLD, RESET);
     let opts = [
         (
             "    --mcp, mcp",
             "Run as a native Model Context Protocol (MCP) JSON-RPC server over stdio",
+        ),
+        (
+            "-u, --url <URL|QUERY>",
+            "Instant Browser / Web App mode (opens any URL, :3000, or search query in ~80ms)",
         ),
         (
             "-s, --size <PRESET|WxH>",
@@ -202,8 +251,10 @@ pub fn print_help() {
     }
     println!("\n{}WINDOW SHORTCUTS:{}", BOLD, RESET);
     let keys = [
-        ("Ctrl+R / F5", "Instant Hot Reload"),
+        ("Ctrl+R / F5", "Instant Hot Reload (or Page Reload)"),
         ("Ctrl+Shift+R", "Crash-safe WebView Hot Restart"),
+        ("Ctrl+G", "Toggle HeaderBar URL / Search Bar"),
+        ("Alt+Left / Alt+Right", "Navigate Back / Forward in history"),
         ("Ctrl+S", "Capture PNG Screenshot (screenshots/)"),
         (
             "Ctrl+I / F12",

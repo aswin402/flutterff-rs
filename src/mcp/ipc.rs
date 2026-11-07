@@ -36,6 +36,10 @@ pub enum IpcCommand {
     ToggleWatch {
         enabled: Option<bool>,
     },
+    Navigate {
+        url: Option<String>,
+        nav: Option<String>,
+    },
     Resize {
         size: String,
     },
@@ -65,6 +69,10 @@ impl IpcCommand {
             "hot_restart" => Some(Self::HotRestart),
             "toggle_watch" => Some(Self::ToggleWatch {
                 enabled: req.get("enabled").and_then(JsonVal::as_bool),
+            }),
+            "navigate" => Some(Self::Navigate {
+                url: req.get("url").and_then(JsonVal::as_str).map(str::to_string),
+                nav: req.get("nav").and_then(JsonVal::as_str).map(str::to_string),
             }),
             "resize" => Some(Self::Resize {
                 size: req
