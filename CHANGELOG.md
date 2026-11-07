@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [2.5.2] - 2026-11-07
+
+### ⚡ Changed & Refactored
+- **Removed `regex` Dependency (Pure $O(n)$ Algorithms)**:
+  - Dropped `regex` (and transitive `regex-automata`, `regex-syntax`, `aho-corasick`) from `Cargo.toml` and `Cargo.lock`, as well as `import re` from `localinstall.sh` and `localupdate.sh`.
+  - Replaced per-line regex compilation in `strip_ansi` with an $O(n)$ single-pass character state machine that strips all ANSI CSI sequences.
+  - Replaced localhost URL regex matching with zero-allocation slice scanning (`extract_local_url` & `extract_url_port`).
+- **Eliminated Hardcoded Values & Duplication**:
+  - Replaced hardcoded version strings in `src/main.rs` with compile-time `env!("CARGO_PKG_NAME")` and `env!("CARGO_PKG_VERSION")`.
+  - Added `define_palette!` macro to generate both `Rgb` tuples and `const &str` ANSI escape sequences from a single source of truth.
+  - Replaced heap-allocated `HashMap` device presets with a deterministic static slice (`DEVICE_PRESETS`).
+  - Replaced scattered pipeline step strings and magic counts with a strongly-typed `Step` enum (`NetCheck`, `GtkShell`, `FlutterDaemon`, `CompileWeb`, `BindServer`).
+- **Table-Driven Log Classification & Iterator CLI Parser**:
+  - Replaced `if/else` log-level chains and triple `.to_lowercase()` calls with a single-pass table lookup (`LEVEL_RULES`, `NOISE_PATTERNS`, `ERROR_PATTERNS`, `LogSource`).
+  - Replaced index-based CLI loop with `CliConfig::parse`, adding support for `--help` / `-h`, `-V`, and `--key=value` syntax.
+
+### 🐛 Fixed
+- **Port Discovery Above `8200` (`find_free_port`)**: Fixed bug where passing `--port > 8200` on a busy port produced an empty range (`start..8200`); now scans `start..=start.saturating_add(120)` with an OS ephemeral port fallback.
+- **Infinite 100ms GLib Timer Leak**: Stopped the outer `url_rx` polling timer (`glib::ControlFlow::Break`) once the server URL is received.
+- **Graceful Flutter Daemon Shutdown**: Sends `"q\n"` to Flutter's `stdin` on window destroy before `child.kill()` so spawned `dart` web-server processes exit cleanly and release the port.
+- **Direct WebView Capture**: Initialized `WebView` before `HeaderBar` controls, removing two redundant `Arc<Mutex<Option<WebView>>>` wrappers.
+
+### 🗑️ Removed
+- Removed unused `src/macros.rs`, `test_cairo.rs`, and `flutter_help.txt`.
+
+---
+
 ## [2.5.1] - 2026-11-07
 
 ### ✨ Added
@@ -24,14 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Rust Edition & Toolchain Upgrade**:
   - Upgraded `Cargo.toml` to **Rust Edition 2024** (`edition = "2024"`, `rust-version = "1.99"`).
 - **Latest Dependency Versions**:
-  - Updated direct dependencies in `Cargo.toml` to their latest compatible releases:
-    - `gtk` → `0.18.2` (`features = ["v3_24"]`)
-    - `webkit2gtk` → `2.0.2` (`features = ["v2_38"]`)
-    - `glib` → `0.18.5`
-    - `cairo-rs` → `0.18.5` (`features = ["png", "v1_16"]`)
-    - `regex` → `1.13.1`
-    - `chrono` → `0.4.45`
-  - Refreshed `Cargo.lock` across 44 transitive crates (`libc 0.2.191`, `futures-* 0.3.34`, `serde 1.0.229`, `syn 2.0.119`, `pkg-config 0.3.34`, etc.).
+  - Updated direct dependencies in `Cargo.toml` to their latest compatible releases (`gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5`, `chrono 0.4.45`).
 - **Local Script Hygiene & `.gitignore`**:
   - Renamed `install.sh` → `localinstall.sh` and `update.sh` → `localupdate.sh`.
   - Removed `install.sh` and `update.sh` from Git tracking and added `localinstall.sh`, `localupdate.sh`, and `*.bak` to `.gitignore`.

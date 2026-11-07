@@ -1,6 +1,6 @@
 [package]
 name = "flutterff-rs"
-version = "2.5.1"
+version = "2.5.2"
 edition = "2024"
 rust-version = "1.99"
 description = "Lightweight native Flutter web development launcher for Linux"
@@ -10,7 +10,6 @@ license = "MIT"
 gtk = { version = "0.18.2", features = ["v3_24"] }
 webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
 glib = "0.18.5"
-regex = "1.13.1"
 chrono = "0.4.45"
 cairo-rs = { version = "0.18.5", features = ["png", "v1_16"] }
 

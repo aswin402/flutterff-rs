@@ -1,5 +1,5 @@
 ---
-version: "2.5.1"
+version: "2.5.2"
 name: flutterff-rs-design-system
 description: "Semantic design system for flutterff-rs — a terminal-first, ultra-lightweight Linux GTK3 + WebKit2GTK mobile simulator and CLI orchestrator for Flutter Web. Combines Catppuccin Mocha dark-mode surfaces with Electric Cyan (#00E5FF), Flutter Blue (#027DFD), and Neon Mint (#50FA7B) 24-bit Truecolor terminal telemetry inspired by cargo-pretty."
 
@@ -52,7 +52,7 @@ components:
 ---
 
 # Design System: `flutterff-rs`
-**Project ID:** `flutterff-rs` · **Version:** `2.5.1` · **Spec Standard:** [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md)
+**Project ID:** `flutterff-rs` · **Version:** `2.5.2` · **Spec Standard:** [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md)
 
 ## 1. Visual Theme & Atmosphere
 
@@ -80,7 +80,7 @@ components:
 
 ## 3. Typography & Terminal Hierarchy
 
-* **Brand Header**: Bold Electric Cyan (`🦊 flutterff-rs`) paired with Dim Graphite version tag (`v2.5.1`).
+* **Brand Header**: Bold Electric Cyan (`🦊 flutterff-rs`) paired with Dim Graphite version tag (`v2.5.2`).
 * **Command Echo Line**: Dim Graphite single-line command signature (`flutter run -d web-server --web-port=8080`) immediately above a 40-character `─` hairline divider.
 * **Tabular Column Alignment**:
   * **Name Column**: Left-aligned, padded to a minimum of `32` characters (`MIN_NAME_WIDTH = 32`) so timers never jitter horizontally.

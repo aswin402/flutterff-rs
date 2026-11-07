@@ -9,7 +9,8 @@ The `flutterff-rs` package targets **Rust Edition 2024** (`rustc 1.99+`) and is 
 - **[glib v0.18.5](https://crates.io/crates/glib)**: Event loops, timeouts, and bindings to coordinate thread safety between Rust OS channels and GTK UI rendering.
 - **[cairo-rs v0.18.5 (png)](https://crates.io/crates/cairo-rs)**: Cairo implementations for reliable snapshot mechanisms saving `.png` bounds effectively on any system (X11/Wayland).
 - **[chrono v0.4.45](https://crates.io/crates/chrono)**: Parsing local times effectively for logging output to terminal standard streams.
-- **[regex v1.13.1](https://crates.io/crates/regex)**: For isolating the server address returned by Flutter standard streams safely regardless of internal debugging texts.
+
+*(Note: ANSI escape stripping and localhost URL extraction use $O(n)$ single-pass state machines in `src/main.rs`, avoiding any `regex` crate dependency.)*
 
 ## Future Modifications
 
