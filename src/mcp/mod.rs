@@ -140,6 +140,9 @@ fn handle_resource_read(req_id: JsonVal, params: &JsonVal) -> JsonVal {
                     .map(String::from)
             })
             .unwrap_or_else(|| "No running simulator session.".to_string()),
+        "flutterff://network" => send_ipc(j_obj([("action", j_str("network"))]))
+            .map(|r| r.to_json())
+            .unwrap_or_else(|e| j_obj([("ok", j_bool(false)), ("error", j_str(e))]).to_json()),
         "flutterff://logs" => send_ipc(j_obj([
             ("action", j_str("logs")),
             ("limit", j_num((DEFAULT_LOG_LIMIT * 2) as f64)),

@@ -23,7 +23,7 @@
     postToHost(MCP_PREFIX + JSON.stringify({ req_id: reqId, result: resultObj }));
   }
 
-  // 1. Console Bridge
+  // 1. Console, Uncaught Error & Network Bridge (Obscura-style observability)
   ["log", "warn", "error", "info", "debug"].forEach(function (level) {
     var orig = console[level];
     console[level] = function () {
@@ -34,6 +34,85 @@
       orig.apply(console, arguments);
     };
   });
+
+  window.addEventListener("error", function (ev) {
+    var detail = ev && (ev.message || (ev.error && ev.error.stack) || "Runtime error");
+    postToHost("flutter: error: " + detail);
+  });
+
+  window.addEventListener("unhandledrejection", function (ev) {
+    var reason = ev && ev.reason ? (ev.reason.stack || ev.reason.message || String(ev.reason)) : "Promise rejection";
+    postToHost("flutter: unhandled: " + reason);
+  });
+
+  var MAX_NET_HISTORY = 100;
+  var networkLog = [];
+
+  function pushNetEntry(entry) {
+    if (networkLog.length >= MAX_NET_HISTORY) {
+      networkLog.shift();
+    }
+    networkLog.push(entry);
+  }
+
+  if (typeof window.fetch === "function") {
+    var origFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      var method = (init && init.method) || (input && input.method) || "GET";
+      var url = typeof input === "string" ? input : (input && input.url) || String(input);
+      var t0 = Date.now();
+      return origFetch(input, init).then(
+        function (resp) {
+          pushNetEntry({
+            type: "fetch",
+            method: String(method).toUpperCase(),
+            url: url,
+            status: resp.status,
+            ok: resp.ok,
+            duration_ms: Date.now() - t0
+          });
+          return resp;
+        },
+        function (err) {
+          pushNetEntry({
+            type: "fetch",
+            method: String(method).toUpperCase(),
+            url: url,
+            status: 0,
+            ok: false,
+            duration_ms: Date.now() - t0,
+            error: String(err)
+          });
+          throw err;
+        }
+      );
+    };
+  }
+
+  if (typeof window.XMLHttpRequest === "function") {
+    var origOpen = window.XMLHttpRequest.prototype.open;
+    var origSend = window.XMLHttpRequest.prototype.send;
+    window.XMLHttpRequest.prototype.open = function (method, url) {
+      this.__ff_method = String(method || "GET").toUpperCase();
+      this.__ff_url = String(url || "");
+      return origOpen.apply(this, arguments);
+    };
+    window.XMLHttpRequest.prototype.send = function () {
+      var xhr = this;
+      var t0 = Date.now();
+      xhr.addEventListener("loadend", function () {
+        pushNetEntry({
+          type: "xhr",
+          method: xhr.__ff_method || "GET",
+          url: xhr.__ff_url || "",
+          status: xhr.status || 0,
+          ok: xhr.status >= 200 && xhr.status < 400,
+          duration_ms: Date.now() - t0
+        });
+      });
+      return origSend.apply(this, arguments);
+    };
+  }
 
   // 2. State & Configuration
   var state = {
@@ -375,7 +454,8 @@
     }
   }
 
-  function formatUiTreeText(items, semActive) {
+  function formatUiTreeText(items, semActive, maxChars) {
+    var budget = typeof maxChars === "number" && maxChars > 0 ? maxChars : 4000;
     var mode = effectivePointerMode();
     var header =
       "Viewport: " +
@@ -420,10 +500,25 @@
           it.height
       );
     }
-    return lines.join("\n");
+    var out = lines.join("\n");
+    return out.length > budget
+      ? out.slice(0, budget) + "\n... (truncated to max_chars=" + budget + ")"
+      : out;
   }
 
-  // 5. Target Resolution (By Index, By Label/Text, or By Coordinates)
+  // 5. Target Resolution (By Index, By Label/Text, or By Coordinates with Stale-Node Auto-Refresh)
+  function findByText(needle) {
+    for (var i = 0; i < state.selectorMap.length; i++) {
+      var candidate = state.selectorMap[i];
+      if (candidate.node && !candidate.node.isConnected) continue;
+      var hay = ((candidate.label || "") + " " + (candidate.value || "")).toLowerCase();
+      if (hay.indexOf(needle) !== -1) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
   function resolveTarget(args) {
     if (state.selectorMap.length === 0) {
       buildUiTree(true);
@@ -431,7 +526,7 @@
 
     if (typeof args.index === "number" && args.index >= 0) {
       var byIdx = state.selectorMap[args.index];
-      if (!byIdx) {
+      if (!byIdx || (byIdx.node && !byIdx.node.isConnected)) {
         buildUiTree(true);
         byIdx = state.selectorMap[args.index];
       }
@@ -447,15 +542,10 @@
 
     if (typeof args.text === "string" && args.text.length > 0) {
       var needle = args.text.toLowerCase();
-      if (state.selectorMap.length === 0) buildUiTree(true);
-      var found = null;
-      for (var i = 0; i < state.selectorMap.length; i++) {
-        var candidate = state.selectorMap[i];
-        var hay = ((candidate.label || "") + " " + (candidate.value || "")).toLowerCase();
-        if (hay.indexOf(needle) !== -1) {
-          found = candidate;
-          break;
-        }
+      var found = findByText(needle);
+      if (!found) {
+        buildUiTree(true);
+        found = findByText(needle);
       }
       if (!found) {
         return { error: 'No element matching text "' + args.text + '" found' };
@@ -676,9 +766,150 @@
           pointer_mode: effectivePointerMode(),
           semantics_active: semActive,
           count: cleanItems.length,
-          summary: formatUiTreeText(items, semActive),
+          summary: formatUiTreeText(items, semActive, payload.max_chars),
           elements: cleanItems
         });
+      });
+    },
+
+    fill_form: function (reqId, payload) {
+      ensureFlutterSemantics(function () {
+        var fields = Array.isArray(payload.fields) ? payload.fields : [];
+        if (fields.length === 0) {
+          sendMcpReply(reqId, { ok: false, error: "'fields' must be a non-empty array" });
+          return;
+        }
+        buildUiTree(true);
+        var filledCount = 0;
+        var errors = [];
+        var stepIdx = 0;
+
+        function nextField() {
+          if (stepIdx >= fields.length) {
+            if (typeof payload.submit_index === "number" || typeof payload.submit_text === "string") {
+              var sub = resolveTarget({
+                index: payload.submit_index,
+                text: payload.submit_text
+              });
+              if (!sub.error) {
+                showPointerInteraction(sub.x, sub.y);
+                dispatchTapSequence(sub.x, sub.y, sub.item);
+              } else {
+                errors.push(sub.error);
+              }
+            }
+            sendMcpReply(reqId, {
+              ok: errors.length === 0,
+              action: "fill_form",
+              filled: filledCount,
+              submitted: Boolean(
+                typeof payload.submit_index === "number" || typeof payload.submit_text === "string"
+              ),
+              errors: errors
+            });
+            return;
+          }
+
+          var f = fields[stepIdx++];
+          var resolved = resolveTarget({
+            index: f.index,
+            text: f.target_text || f.text
+          });
+          if (resolved.error) {
+            errors.push(resolved.error);
+            nextField();
+            return;
+          }
+          showPointerInteraction(resolved.x, resolved.y);
+          dispatchTapSequence(resolved.x, resolved.y, resolved.item);
+          setTimeout(function () {
+            var inputEl =
+              (resolved.item && resolved.item.isInput && resolved.item.node) || findActiveTextInput();
+            if (inputEl) {
+              setNativeInputValue(inputEl, String(f.value || ""), f.clear !== false);
+              filledCount++;
+            } else {
+              errors.push("No input element found for field #" + stepIdx);
+            }
+            nextField();
+          }, 55);
+        }
+
+        nextField();
+      });
+    },
+
+    wait_for: function (reqId, payload) {
+      var timeoutMs = typeof payload.timeout_ms === "number" ? payload.timeout_ms : 4000;
+      var pollMs = typeof payload.poll_ms === "number" ? Math.max(25, payload.poll_ms) : 100;
+      var wantGone = Boolean(payload.gone);
+      var needle = typeof payload.text === "string" ? payload.text.toLowerCase() : "";
+      var roleNeedle = typeof payload.role === "string" ? payload.role.toLowerCase() : "";
+      var start = Date.now();
+
+      ensureFlutterSemantics(function () {
+        function check() {
+          var items = buildUiTree(true);
+          var matchedItem = null;
+          for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            var textOk =
+              !needle ||
+              ((it.label || "") + " " + (it.value || "")).toLowerCase().indexOf(needle) !== -1;
+            var roleOk = !roleNeedle || (it.role || "").toLowerCase() === roleNeedle;
+            if (textOk && roleOk) {
+              matchedItem = it;
+              break;
+            }
+          }
+          if (!matchedItem && needle && !roleNeedle && document.body) {
+            var bodyTxt = (document.body.innerText || "").toLowerCase();
+            if (bodyTxt.indexOf(needle) !== -1) {
+              matchedItem = { index: -1, role: "text", label: payload.text };
+            }
+          }
+
+          var satisfied = wantGone ? !matchedItem : Boolean(matchedItem);
+          if (satisfied) {
+            sendMcpReply(reqId, {
+              ok: true,
+              action: "wait_for",
+              elapsed_ms: Date.now() - start,
+              matched: matchedItem
+                ? { index: matchedItem.index, role: matchedItem.role, label: matchedItem.label }
+                : null
+            });
+            return;
+          }
+          if (Date.now() - start >= timeoutMs) {
+            sendMcpReply(reqId, {
+              ok: false,
+              error:
+                "Timed out after " +
+                timeoutMs +
+                "ms waiting for " +
+                (wantGone ? "disappearance of " : "") +
+                (payload.text || payload.role || "condition")
+            });
+            return;
+          }
+          setTimeout(check, pollMs);
+        }
+        check();
+      });
+    },
+
+    network: function (reqId, payload) {
+      var limit = typeof payload.limit === "number" && payload.limit > 0 ? payload.limit : 50;
+      var slice = networkLog.slice(Math.max(0, networkLog.length - limit));
+      if (payload.clear) {
+        networkLog = [];
+      }
+      sendMcpReply(reqId, {
+        ok: true,
+        action: "network",
+        count: slice.length,
+        requests: slice
       });
     },
 
@@ -768,6 +999,23 @@
 
         var dx = typeof payload.dx === "number" ? payload.dx : 0;
         var dy = typeof payload.dy === "number" ? payload.dy : 300;
+        if (typeof payload.direction === "string") {
+          var dir = payload.direction.toLowerCase();
+          var vStep = Math.round(window.innerHeight * 0.7);
+          var hStep = Math.round(window.innerWidth * 0.7);
+          var dirMap = {
+            down: [0, vStep],
+            up: [0, -vStep],
+            bottom: [0, window.innerHeight * 4],
+            top: [0, -window.innerHeight * 4],
+            right: [hStep, 0],
+            left: [-hStep, 0]
+          };
+          if (dirMap[dir]) {
+            dx = dirMap[dir][0];
+            dy = dirMap[dir][1];
+          }
+        }
         var endX = Math.max(10, Math.min(window.innerWidth - 10, x - Math.round(dx * 0.35)));
         var endY = Math.max(10, Math.min(window.innerHeight - 10, y - Math.round(dy * 0.35)));
 

@@ -8,18 +8,17 @@ mod tui;
 use std::cell::RefCell;
 use std::env;
 use std::io::Write;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::process::{Child, ChildStdin};
-use std::sync::mpsc::{self, TryRecvError};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use gtk::{Box as GtkBox, HeaderBar, Menu, MenuButton, MenuItem};
 use webkit2gtk::{
-    CacheModel, SettingsExt, UserContentInjectedFrames, UserContentManager, UserContentManagerExt,
-    UserScript, UserScriptInjectionTime, WebContext, WebContextExt, WebView, WebViewExt,
-    WebViewExtManual,
+    CacheModel, HardwareAccelerationPolicy, SettingsExt, UserContentInjectedFrames,
+    UserContentManager, UserContentManagerExt, UserScript, UserScriptInjectionTime, WebContext,
+    WebContextExt, WebView, WebViewExt, WebViewExtManual,
 };
 
 use config::{
@@ -27,8 +26,7 @@ use config::{
     print_size_presets, resolve_dimensions, spawn_compact_thread,
 };
 use flutter::{
-    LogSource, check_online, extract_url_port, find_free_port, format_flutter_log, is_port_free,
-    run_flutter,
+    LogSource, check_online, find_free_port, format_flutter_log, is_port_free, run_flutter,
 };
 use mcp::{IpcCommand, IpcRequest, j_bool, j_num, j_obj, j_str};
 use screenshot::{capture_screenshot_surface, take_screenshot};
@@ -38,12 +36,43 @@ use tui::{PrettyProgress, Step, spawn_pretty_tui};
 const AGENT_BRIDGE_JS: &str = include_str!("agent_bridge.js");
 const MCP_BRIDGE_PREFIX: &str = "__FF_MCP__:";
 
+unsafe extern "C" {
+    fn malloc_trim(pad: usize) -> i32;
+}
+
+/// Releases unused glibc heap pages back to the OS kernel
+pub fn trim_process_heap() {
+    unsafe {
+        let _ = malloc_trim(0);
+    }
+}
+
+/// Bounds glibc arenas, WebKit bmalloc/DMA-BUF overhead, and Mesa thread pools
+fn tune_allocator_env() {
+    for (key, val) in [
+        ("MALLOC_ARENA_MAX", "2"),
+        ("MALLOC_TRIM_THRESHOLD_", "65536"),
+        ("JavaScriptCoreUseBMalloc", "0"),
+        ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
+        ("GALLIUM_THREAD", "0"),
+        ("LP_NUM_THREADS", "1"),
+    ] {
+        if env::var_os(key).is_none() {
+            unsafe {
+                env::set_var(key, val);
+            }
+        }
+    }
+}
+
 thread_local! {
     static IPC_DISPATCHER: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
+    static URL_DISPATCHER: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
 }
 
 fn configure_low_memory_webview(webview: &WebView) {
     if let Some(settings) = WebViewExt::settings(webview) {
+        settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::OnDemand);
         settings.set_enable_page_cache(false);
         settings.set_enable_offline_web_application_cache(false);
         settings.set_enable_html5_database(false);
@@ -51,6 +80,12 @@ fn configure_low_memory_webview(webview: &WebView) {
         settings.set_enable_hyperlink_auditing(false);
         settings.set_enable_developer_extras(false);
         settings.set_enable_smooth_scrolling(false);
+        settings.set_enable_webaudio(false);
+        settings.set_enable_media(false);
+        settings.set_enable_media_stream(false);
+        settings.set_enable_mediasource(false);
+        settings.set_enable_encrypted_media(false);
+        settings.set_enable_site_specific_quirks(false);
     }
 }
 
@@ -63,6 +98,7 @@ fn sync_webview_pointer_mode(webview: &WebView, w: i32) {
 }
 
 fn main() {
+    tune_allocator_env();
     let started = Instant::now();
 
     let mut cfg = match CliConfig::parse(env::args()) {
@@ -454,7 +490,7 @@ fn main() {
                         },
                         IpcCommand::Screenshot => {
                             wv_ipc.queue_draw();
-                            match capture_screenshot_surface(&wv_ipc) {
+                            let out = match capture_screenshot_surface(&wv_ipc) {
                                 Ok((path, w, h)) => j_obj([
                                     ("ok", j_bool(true)),
                                     ("path", j_str(path.to_string_lossy().to_string())),
@@ -462,7 +498,9 @@ fn main() {
                                     ("height", j_num(h as f64)),
                                 ]),
                                 Err(e) => j_obj([("ok", j_bool(false)), ("error", j_str(e))]),
-                            }
+                            };
+                            trim_process_heap();
+                            out
                         }
                         IpcCommand::Logs {
                             limit,
@@ -559,51 +597,44 @@ fn main() {
         });
     });
 
-    let (url_tx, url_rx) = mpsc::channel();
+    let (url_tx, url_rx) = mpsc::channel::<String>();
+    {
+        let current_url_clone = current_url.clone();
+        let wv_load = webview.clone();
+        URL_DISPATCHER.with(|cell| {
+            *cell.borrow_mut() = Some(Box::new(move || {
+                if let Ok(url) = url_rx.try_recv() {
+                    *current_url_clone.lock().unwrap() = Some(url.clone());
+                    wv_load.load_uri(&url);
+                    trim_process_heap();
+                }
+            }));
+        });
+    }
+
     let c_slot = child_slot.clone();
     let s_slot = stdin_slot.clone();
     let prog_fl = progress.clone();
     let port = cfg.port;
     spawn_compact_thread("ff-flutter", move || {
-        run_flutter(flutter_cmd, port, url_tx, c_slot, s_slot, prog_fl);
-    });
-
-    let current_url_clone = current_url.clone();
-    let wv_load = webview.clone();
-    let prog_srv = progress.clone();
-    glib::timeout_add_local(Duration::from_millis(100), move || {
-        match url_rx.try_recv() {
-            Ok(url) => {
-                *current_url_clone.lock().unwrap() = Some(url.clone());
-                let target_port = extract_url_port(&url, port);
-                let target_addr =
-                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, target_port));
-                let wv = wv_load.clone();
-                let prog_ready = prog_srv.clone();
-
-                glib::timeout_add_local(Duration::from_millis(250), move || {
-                    if TcpStream::connect_timeout(&target_addr, Duration::from_millis(150)).is_ok()
-                    {
-                        {
-                            let mut pr = prog_ready.lock().unwrap();
-                            pr.finish_step(
-                                Step::BindServer,
-                                Some(format!("bind http://localhost:{}", target_port)),
-                            );
-                            pr.server_url = Some(url.clone());
-                            pr.settled = Some(true);
+        run_flutter(
+            flutter_cmd,
+            port,
+            url_tx,
+            || {
+                glib::idle_add(|| {
+                    URL_DISPATCHER.with(|cell| {
+                        if let Some(dispatch) = cell.borrow_mut().as_mut() {
+                            dispatch();
                         }
-                        wv.load_uri(&url);
-                        glib::ControlFlow::Break
-                    } else {
-                        glib::ControlFlow::Continue
-                    }
+                    });
+                    glib::ControlFlow::Break
                 });
-                glib::ControlFlow::Break
-            }
-            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
-        }
+            },
+            c_slot,
+            s_slot,
+            prog_fl,
+        );
     });
 
     gtk::main();

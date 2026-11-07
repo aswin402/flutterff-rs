@@ -124,7 +124,7 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "flutter_ui_tree",
-        desc: "Inspect the live Flutter Semantics & DOM UI tree (page-agent style). Auto-enables Flutter Web semantics and returns indexed interactive widgets ([0], [1], [2]...) with roles, labels, values, bounding-box coordinates, and active pointer mode (desktop 'cursor' vs mobile 'touch' dot).",
+        desc: "Inspect the live Flutter Semantics & DOM UI tree (page-agent & obscura style). Auto-enables Flutter Web semantics and returns indexed interactive widgets ([0], [1], [2]...) with roles, labels, values, bounding-box coordinates, and active pointer mode.",
         params: &[
             ToolParamSpec {
                 name: "include_static",
@@ -136,6 +136,12 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
                 name: "overlay",
                 kind: "boolean",
                 desc: "Render visual [0], [1] Set-of-Mark bounding-box badges over the simulator window (default: false).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "max_chars",
+                kind: "integer",
+                desc: "Character budget for the returned summary to save agent context tokens (default: 4000).",
                 required: false,
             },
         ],
@@ -207,9 +213,93 @@ pub const TOOL_SPECS: &[ToolSpec] = &[
         ],
     },
     ToolSpec {
-        name: "flutter_scroll",
-        desc: "Scroll or swipe the Flutter viewport or a specific scrollable widget. Animates a touch swipe dot on mobile or cursor wheel scroll on desktop.",
+        name: "flutter_fill_form",
+        desc: "Fill multiple Flutter TextFields/inputs and optionally tap a submit button in a single call (Obscura browser_fill_form style). Saves N round-trips when testing multi-field forms.",
         params: &[
+            ToolParamSpec {
+                name: "fields",
+                kind: "array",
+                desc: "Array of field objects: [{ index?: number, target_text?: string, value: string, clear?: boolean }].",
+                required: true,
+            },
+            ToolParamSpec {
+                name: "submit_index",
+                kind: "integer",
+                desc: "Optional UI tree index of the submit button to tap after filling all fields.",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "submit_text",
+                kind: "string",
+                desc: "Optional visible label of the submit button to tap after filling all fields (e.g. 'Sign In', 'Submit').",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
+        name: "flutter_wait_for",
+        desc: "Wait until a widget label/text appears (or disappears) in the Flutter UI tree or a JS expression becomes truthy (Obscura wait_for_text style).",
+        params: &[
+            ToolParamSpec {
+                name: "text",
+                kind: "string",
+                desc: "Case-insensitive text/label substring to wait for in the Flutter UI tree or page text.",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "role",
+                kind: "string",
+                desc: "Optional widget role to match (e.g. 'button', 'textfield', 'dialog').",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "gone",
+                kind: "boolean",
+                desc: "If true, wait for the matching text/widget to disappear instead of appear (default: false).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "timeout_ms",
+                kind: "integer",
+                desc: "Maximum time to wait in milliseconds (default: 4000).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "poll_ms",
+                kind: "integer",
+                desc: "Polling interval in milliseconds (default: 100).",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
+        name: "flutter_network",
+        desc: "Inspect recent HTTP fetch and XMLHttpRequest calls made by the Flutter Web app (method, URL, status code, latency in ms, and error state).",
+        params: &[
+            ToolParamSpec {
+                name: "limit",
+                kind: "integer",
+                desc: "Maximum number of recent network requests to return (default: 50).",
+                required: false,
+            },
+            ToolParamSpec {
+                name: "clear",
+                kind: "boolean",
+                desc: "Clear the captured network request buffer after reading (default: false).",
+                required: false,
+            },
+        ],
+    },
+    ToolSpec {
+        name: "flutter_scroll",
+        desc: "Scroll or swipe the Flutter viewport or a specific scrollable widget using semantic directions ('down', 'up', 'top', 'bottom', 'left', 'right') or pixel deltas (dx, dy).",
+        params: &[
+            ToolParamSpec {
+                name: "direction",
+                kind: "string",
+                desc: "Semantic scroll direction: 'down', 'up', 'top', 'bottom', 'left', or 'right'.",
+                required: false,
+            },
             ToolParamSpec {
                 name: "dx",
                 kind: "integer",
@@ -292,6 +382,9 @@ pub const WEB_AGENT_TOOL_MAP: &[(&str, &str)] = &[
     ("flutter_ui_tree", "ui_tree"),
     ("flutter_tap", "tap"),
     ("flutter_type", "type_text"),
+    ("flutter_fill_form", "fill_form"),
+    ("flutter_wait_for", "wait_for"),
+    ("flutter_network", "network"),
     ("flutter_scroll", "scroll"),
     ("flutter_press_key", "press_key"),
     ("flutter_inspect_overlay", "inspect_overlay"),
@@ -310,6 +403,12 @@ pub const RESOURCE_SPECS: &[ResourceSpec] = &[
         name: "flutterff-rs Live UI Semantics Tree",
         mime: "text/plain",
         desc: "Page-agent style indexed Flutter Semantics & DOM widget tree ([0], [1]...).",
+    },
+    ResourceSpec {
+        uri: "flutterff://network",
+        name: "flutterff-rs Live Network Requests",
+        mime: "application/json",
+        desc: "Captured fetch & XMLHttpRequest calls made by the Flutter Web app.",
     },
     ResourceSpec {
         uri: "flutterff://logs",

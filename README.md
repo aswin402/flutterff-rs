@@ -198,7 +198,10 @@ flutterff-rs [OPTIONS]
 | **`flutter_ui_tree`** | **[`page-agent`](https://github.com/alibaba/page-agent)-style Semantics & DOM Inspector**: Auto-enables Flutter Web semantics and returns indexed interactive widgets (`[0]`, `[1]`, `[2]...`) with roles, labels, values, and `(x, y)` coordinates. |
 | **`flutter_tap`** | Taps/clicks a Flutter widget by **`index`** (`[0]`), **`text`/label** (`"Sign In"`), or **`(x, y)` coordinates**. Uses a **Red-Orange Mobile Touch Dot (`●`) + touch events** on mobile/tablet viewports and a **Red-Orange `Bibata-Modern-Ice` Desktop Cursor (`↖`) + mouse events** on desktop viewports. |
 | **`flutter_type`** | Types text into a Flutter `TextField` or input (`text`, optional `index` or `target_text` to tap/focus first, `clear`, and `submit`). |
-| **`flutter_scroll`** | Scrolls or swipes the viewport or an indexed scrollable widget (`dx`, `dy`, `index`, `x`, `y`) with animated touch drag or wheel motion. |
+| **`flutter_fill_form`** | **[`obscura`](https://github.com/h4ckf0r0day/obscura)-style Multi-Field Form Filler**: Fills multiple Flutter `TextField`s/inputs and optionally taps a submit button in **one MCP call** (`fields`, `submit_index`, `submit_text`). |
+| **`flutter_wait_for`** | **[`obscura`](https://github.com/h4ckf0r0day/obscura)-style Smart Wait**: Waits until a widget label/text or role appears (or disappears with `gone: true`) within `timeout_ms`. |
+| **`flutter_network`** | **[`obscura`](https://github.com/h4ckf0r0day/obscura)-style Network Inspector**: Returns recent `fetch` & `XMLHttpRequest` API calls (`method`, `url`, `status`, `duration_ms`, `ok`, `error`). |
+| **`flutter_scroll`** | Scrolls or swipes the viewport or an indexed scrollable widget using semantic directions (`down`, `up`, `top`, `bottom`, `left`, `right`) or pixel deltas (`dx`, `dy`). |
 | **`flutter_press_key`** | Dispatches keyboard events (`Enter`, `Escape`, `Backspace`, `Tab`, `ArrowDown`, etc.) to the active Flutter widget. |
 | **`flutter_inspect_overlay`** | Toggles the visual `[0]`, `[1]` Set-of-Mark bounding-box overlay and configures `pointer_mode` (`"auto"`, `"cursor"`, `"touch"`). |
 | **`flutter_hot_reload`** | Injects `'r'` into the running Flutter daemon for instant Hot Reload. |
@@ -208,7 +211,7 @@ flutterff-rs [OPTIONS]
 | **`flutter_logs`** | Reads recent filtered Flutter & WebView logs (`INF`, `WRN`, `ERR`, `DBG`) with optional `limit`, `level`, and `clear`. |
 | **`flutter_eval_js`** | Evaluates arbitrary JavaScript inside the live WebKit2 WebView and returns the evaluated result synchronously. |
 | **`flutter_stop`** | Gracefully stops the Flutter daemon (`'q'`) and closes the simulator window. |
-| **`flutterff://status` · `flutterff://ui_tree` · `flutterff://logs` · `flutterff://presets`** | Built-in MCP Resources for querying live simulator state, indexed UI tree, logs, and viewport presets. |
+| **`flutterff://status` · `flutterff://ui_tree` · `flutterff://network` · `flutterff://logs` · `flutterff://presets`** | Built-in MCP Resources for querying live simulator state, indexed UI tree, API requests, logs, and viewport presets. |
 
 ### Built-in Device Presets & Adaptive Pointer Mode
 

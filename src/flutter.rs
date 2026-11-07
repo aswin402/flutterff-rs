@@ -84,7 +84,7 @@ pub fn find_free_port(start: u16) -> u16 {
 pub fn check_online() -> bool {
     PROBE_ENDPOINTS
         .iter()
-        .any(|addr| TcpStream::connect_timeout(addr, Duration::from_secs(2)).is_ok())
+        .any(|addr| TcpStream::connect_timeout(addr, Duration::from_millis(350)).is_ok())
 }
 
 /// Zero-allocation fast-path ANSI escape sequence stripper
@@ -189,14 +189,17 @@ pub fn format_flutter_log(line: &str, source: LogSource) -> Option<String> {
     ))
 }
 
-pub fn run_flutter(
+pub fn run_flutter<W>(
     cmd: Vec<String>,
     port: u16,
     url_tx: mpsc::Sender<String>,
+    wake_url: W,
     child_slot: Arc<Mutex<Option<Child>>>,
     stdin_slot: Arc<Mutex<Option<ChildStdin>>>,
     progress: Arc<Mutex<PrettyProgress>>,
-) {
+) where
+    W: Fn() + Send + 'static,
+{
     let mut url_sent = false;
 
     progress
@@ -262,15 +265,34 @@ pub fn run_flutter(
 
             if let Some(url_str) = detected_url {
                 url_sent = true;
+                let target_port = extract_url_port(&url_str, port);
                 {
                     let mut p = progress.lock().unwrap();
                     p.finish_step(Step::CompileWeb, None);
                     p.start_step(
                         Step::BindServer,
-                        Some(format!("bind http://localhost:{}", port)),
+                        Some(format!("bind http://localhost:{}", target_port)),
                     );
                 }
+                let target_addr =
+                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, target_port));
+                for _ in 0..80 {
+                    if TcpStream::connect_timeout(&target_addr, Duration::from_millis(50)).is_ok() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                {
+                    let mut p = progress.lock().unwrap();
+                    p.finish_step(
+                        Step::BindServer,
+                        Some(format!("bind http://localhost:{}", target_port)),
+                    );
+                    p.server_url = Some(url_str.clone());
+                    p.settled = Some(true);
+                }
                 let _ = url_tx.send(url_str);
+                wake_url();
             }
         }
 
