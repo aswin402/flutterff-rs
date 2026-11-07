@@ -174,7 +174,7 @@ flutterff-rs [OPTIONS]
 
 ## 🤖 Native Rust MCP Server (`flutterff-rs --mcp`)
 
-`flutterff-rs` includes a **zero-dependency, ultra-lightweight Rust-native MCP server** (`src/mcp.rs`) that bridges AI coding agents (Claude Code, Cursor, Antigravity, Windsurf, Zed) directly to the live GTK3 + WebKit2 simulator window over a local Unix domain socket (`$XDG_RUNTIME_DIR/flutterff-rs.sock`).
+`flutterff-rs` includes a **zero-dependency, ultra-lightweight Rust-native MCP server** (`src/mcp/`) that bridges AI coding agents (Claude Code, Cursor, Antigravity, Windsurf, Zed) directly to the live GTK3 + WebKit2 simulator window over a local Unix domain socket (`$XDG_RUNTIME_DIR/flutterff-rs.sock`).
 
 ### MCP Configuration (`mcp_config.json` / `.mcp.json`)
 
@@ -226,8 +226,17 @@ flutterff-rs [OPTIONS]
 
 - **[`Cargo.toml`](Cargo.toml)** — Package manifest (`v2.5.4`, Rust Edition `2024`, `gtk 0.18.2`, `webkit2gtk 2.0.2`, `glib 0.18.5`, `cairo-rs 0.18.5`, `chrono 0.4.45` — zero `regex` dependency).
 - **[`.cargo/config.toml`](.cargo/config.toml)** — Enforces single-job (`jobs = 1` / `-j 1`) Cargo builds and checks.
-- **[`src/main.rs`](src/main.rs)** — Core launcher, GTK3/WebKit2 window shell, Cairo screenshot engine, local Unix IPC bridge, and `cargo-pretty` terminal TUI.
-- **[`src/mcp.rs`](src/mcp.rs)** — Zero-dependency native Rust Model Context Protocol (MCP) JSON-RPC 2.0 server, minimal JSON parser/serializer, and base64 PNG encoder.
+- **[`src/main.rs`](src/main.rs)** — GTK3 + WebKit2 simulator window orchestration, keyboard shortcuts (`r`/`R`/`s`/`c`/`h`/`q`), and runtime event loop.
+- **[`src/config.rs`](src/config.rs)** — Runtime constants, device viewport presets (`DEVICE_PRESETS`), adaptive pointer mode thresholds, and CLI argument parser.
+- **[`src/theme.rs`](src/theme.rs)** — 24-bit Truecolor palette (`define_palette!`), `FLUTTERFF_RAMP` gradient sampler, and tagged terminal logging.
+- **[`src/tui.rs`](src/tui.rs)** — `cargo-pretty` terminal startup progress renderer and 80ms spinner ticker.
+- **[`src/flutter.rs`](src/flutter.rs)** — Flutter `web-server` daemon spawner, port availability prober, single-pass ANSI stripper, and log classifier.
+- **[`src/screenshot.rs`](src/screenshot.rs)** — Cairo `ARgb32` window surface capture and timestamped PNG writer.
+- **[`src/mcp/`](src/mcp/)** — Modular zero-dependency Rust Model Context Protocol (MCP) server:
+  - **[`src/mcp/mod.rs`](src/mcp/mod.rs)** — JSON-RPC 2.0 `stdio` loop and MCP tool/resource dispatcher.
+  - **[`src/mcp/ipc.rs`](src/mcp/ipc.rs)** — Local Unix domain socket IPC server (`$XDG_RUNTIME_DIR/flutterff-rs.sock`), `IpcCommand` enum, and WebKit2 JS result bridge.
+  - **[`src/mcp/schema.rs`](src/mcp/schema.rs)** — Table-driven MCP tool and resource schema definitions (`TOOL_SPECS`, `WEB_AGENT_TOOL_MAP`, `RESOURCE_SPECS`).
+  - **[`src/mcp/json.rs`](src/mcp/json.rs)** — Zero-dependency byte-slice JSON parser/serializer (`JsonVal`) and base64 PNG encoder.
 - **[`src/agent_bridge.js`](src/agent_bridge.js)** — In-page GUI agent & Flutter Semantics inspector (inspired by [`alibaba/page-agent`](https://github.com/alibaba/page-agent)) with adaptive desktop cursor (`↖`) and mobile touch dot (`●`) overlays.
 - **[`DESIGN.md`](DESIGN.md)** — Semantic design system specification ([VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md) format).
 - **[`CHANGELOG.md`](CHANGELOG.md)** — Version history and release notes.

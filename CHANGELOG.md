@@ -26,6 +26,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Added a HeaderBar button (`find-location-symbolic`) to toggle the `[0]`, `[1]` UI Semantics overlay with one click.
   - Added bidirectional JS return-value routing (`MCP_BRIDGE_PREFIX`) so `flutter_eval_js` and all `WebAgent` commands return evaluated results synchronously to MCP clients.
 
+### 🔧 Changed
+- **Modular Source Architecture (`src/`)**:
+  - Split `src/main.rs` (`1,502` → `579` lines) into focused modules: `src/config.rs` (presets, CLI parsing, pointer thresholds), `src/theme.rs` (24-bit Truecolor palette & ramp), `src/tui.rs` (`cargo-pretty` progress renderer), `src/flutter.rs` (daemon spawning, port prober, ANSI stripper, log classifier), and `src/screenshot.rs` (Cairo `ARgb32` PNG snapshot capture).
+  - Split `src/mcp.rs` (`1,176` lines) into `src/mcp/mod.rs` (JSON-RPC 2.0 `stdio` loop & tool dispatch), `src/mcp/schema.rs` (`TOOL_SPECS`, `WEB_AGENT_TOOL_MAP`, `RESOURCE_SPECS`), `src/mcp/json.rs` (byte-slice `JsonVal` parser/serializer & `base64_encode`), and `src/mcp/ipc.rs` (Unix domain socket IPC server & `IpcCommand`).
+
 ---
 
 ## [2.5.3] - 2026-11-07
