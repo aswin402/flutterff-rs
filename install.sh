@@ -64,16 +64,17 @@ if [ "$OS_NAME" != "Linux" ]; then
 fi
 step_ok "platform" "Linux ($ARCH_NAME)"
 
-if command -v ldconfig &>/dev/null; then
-    if ! ldconfig -p 2>/dev/null | grep -q "libwebkit2gtk-4\.1\.so"; then
-        step_warn "webkit2gtk-4.1 runtime" "not found in ldconfig cache"
-        echo -e "  ${C_SUB}Install runtime library:${RESET}"
-        echo -e "    Ubuntu/Debian: ${C_CYAN}sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0${RESET}"
-        echo -e "    Arch Linux:    ${C_CYAN}sudo pacman -S gtk3 webkit2gtk-4.1${RESET}"
-        echo -e "    Fedora:        ${C_CYAN}sudo dnf install gtk3 webkit2gtk4.1${RESET}"
-    else
-        step_ok "webkit2gtk-4.1 runtime" "found"
-    fi
+if (/sbin/ldconfig -p 2>/dev/null || ldconfig -p 2>/dev/null) | grep -q "libwebkit2gtk-4\.1\.so" \
+    || [ -e "/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0" ] \
+    || [ -e "/usr/lib64/libwebkit2gtk-4.1.so.0" ] \
+    || [ -e "/usr/lib/libwebkit2gtk-4.1.so.0" ]; then
+    step_ok "webkit2gtk-4.1 runtime" "found"
+else
+    step_warn "webkit2gtk-4.1 runtime" "not detected in standard library paths"
+    echo -e "  ${C_SUB}Install runtime library:${RESET}"
+    echo -e "    Ubuntu/Debian: ${C_CYAN}sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0${RESET}"
+    echo -e "    Arch Linux:    ${C_CYAN}sudo pacman -S gtk3 webkit2gtk-4.1${RESET}"
+    echo -e "    Fedora:        ${C_CYAN}sudo dnf install gtk3 webkit2gtk4.1${RESET}"
 fi
 
 mkdir -p "$INSTALL_DIR"
@@ -83,11 +84,29 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 # ── 2. Download Prebuilt Release Binary (or Build from Source) ───────────────
 INSTALLED_BIN=0
 if [ "$FROM_SOURCE" -eq 0 ] && [ "$ARCH_NAME" = "x86_64" ]; then
+    API_REL_URL="https://api.github.com/repos/$REPO/releases/latest"
     ARCHIVE_URL="https://github.com/$REPO/releases/latest/download/flutterff-rs-linux-x86_64.tar.gz"
     SUMS_URL="https://github.com/$REPO/releases/latest/download/SHA256SUMS"
 
-    if curl -fsSL "$ARCHIVE_URL" -o "$TMP_DIR/flutterff-rs-linux-x86_64.tar.gz" 2>/dev/null; then
-        if curl -fsSL "$SUMS_URL" -o "$TMP_DIR/SHA256SUMS" 2>/dev/null; then
+    if command -v python3 &>/dev/null && curl -fsSL "$API_REL_URL" -o "$TMP_DIR/release.json" 2>/dev/null; then
+        read -r API_ARCH_URL API_SUMS_URL < <(python3 - "$TMP_DIR/release.json" <<'PYURL'
+import json, sys
+data = json.load(open(sys.argv[1]))
+arch_u, sums_u = "", ""
+for a in data.get("assets", []):
+    if a.get("name") == "flutterff-rs-linux-x86_64.tar.gz":
+        arch_u = a.get("url", "")
+    elif a.get("name") == "SHA256SUMS":
+        sums_u = a.get("url", "")
+print(f"{arch_u} {sums_u}")
+PYURL
+)
+        [ -n "${API_ARCH_URL:-}" ] && ARCHIVE_URL="$API_ARCH_URL"
+        [ -n "${API_SUMS_URL:-}" ] && SUMS_URL="$API_SUMS_URL"
+    fi
+
+    if curl -fsSL -H "Accept: application/octet-stream" "$ARCHIVE_URL" -o "$TMP_DIR/flutterff-rs-linux-x86_64.tar.gz" 2>/dev/null; then
+        if curl -fsSL -H "Accept: application/octet-stream" "$SUMS_URL" -o "$TMP_DIR/SHA256SUMS" 2>/dev/null; then
             (cd "$TMP_DIR" && grep "flutterff-rs-linux-x86_64.tar.gz" SHA256SUMS | sha256sum -c - >/dev/null 2>&1) \
                 && step_ok "sha256 checksum" "verified" \
                 || step_warn "sha256 checksum" "skipped"
@@ -108,6 +127,30 @@ if [ "$INSTALLED_BIN" -eq 0 ]; then
     fi
     step_ok "source build" "cloning https://github.com/$REPO.git..."
     git clone --depth 1 "https://github.com/$REPO.git" "$TMP_DIR/src" >/dev/null 2>&1
+
+    # Auto-shim pkg-config & .so symlinks if runtime libs exist without -dev packages
+    if ! pkg-config --exists gdk-3.0 webkit2gtk-4.1 2>/dev/null && [ -d "/usr/lib/x86_64-linux-gnu" ]; then
+        SHIM_DIR="$TMP_DIR/build-deps"
+        mkdir -p "$SHIM_DIR/pkgconfig" "$SHIM_DIR/lib"
+        for pair in \
+            "glib-2.0:glib-2.0.so.0:2.80.0" "gobject-2.0:gobject-2.0.so.0:2.80.0" \
+            "gio-2.0:gio-2.0.so.0:2.80.0" "atk:atk-1.0.so.0:2.52.0" \
+            "cairo:cairo.so.2:1.18.0" "cairo-gobject:cairo-gobject.so.2:1.18.0" \
+            "pango:pango-1.0.so.0:1.52.0" "pangocairo:pangocairo-1.0.so.0:1.52.0" \
+            "gdk-pixbuf-2.0:gdk_pixbuf-2.0.so.0:2.42.0" "gdk-3.0:gdk-3.so.0:3.24.41" \
+            "gtk+-3.0:gtk-3.so.0:3.24.41" "libsoup-3.0:soup-3.0.so.0:3.4.4" \
+            "javascriptcoregtk-4.1:javascriptcoregtk-4.1.so.0:2.44.0" \
+            "webkit2gtk-4.1:webkit2gtk-4.1.so.0:2.44.0"; do
+            IFS=":" read -r pkg so ver <<< "$pair"
+            libname="${so%%.so*}"
+            ln -sf "/usr/lib/x86_64-linux-gnu/lib${so}" "$SHIM_DIR/lib/lib${libname}.so"
+            printf "Name: %s\nDescription: shim\nVersion: %s\nLibs: -L%s/lib -l%s\nCflags:\n" \
+                "$pkg" "$ver" "$SHIM_DIR" "$libname" > "$SHIM_DIR/pkgconfig/${pkg}.pc"
+        done
+        export PKG_CONFIG_PATH="$SHIM_DIR/pkgconfig:${PKG_CONFIG_PATH:-}"
+        export LIBRARY_PATH="$SHIM_DIR/lib:${LIBRARY_PATH:-}"
+    fi
+
     (cd "$TMP_DIR/src" && cargo build --release -j 1)
     BIN_CANDIDATE="$TMP_DIR/src/target/release/flutterff-rs"
     if [ ! -f "$BIN_CANDIDATE" ]; then
