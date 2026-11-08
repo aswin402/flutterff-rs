@@ -8,12 +8,33 @@
 *Native GTK3 + WebKit2GTK viewport · 24-bit `cargo-pretty` live terminal TUI · Zero Chrome overhead.*
 
 [![Version](https://img.shields.io/badge/version-2.5.6-00E5FF?style=flat-square&labelColor=1E1E2E)](CHANGELOG.md)
+[![Release](https://img.shields.io/github/v/release/aswin402/flutterff-rs?style=flat-square&color=50FA7B&labelColor=1E1E2E)](https://github.com/aswin402/flutterff-rs/releases/latest)
 [![Rust Edition](https://img.shields.io/badge/rust-2024%20(1.99%2B)-027DFD?style=flat-square&logo=rust&logoColor=white&labelColor=1E1E2E)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-linux%20(X11%20%2F%20Wayland)-50FA7B?style=flat-square&logo=linux&logoColor=white&labelColor=1E1E2E)](#)
 [![Design System](https://img.shields.io/badge/DESIGN.md-awesome--design--md-72EFDD?style=flat-square&labelColor=1E1E2E)](DESIGN.md)
 [![License](https://img.shields.io/badge/license-MIT-CDD6F4?style=flat-square&labelColor=1E1E2E)](#)
 
 </div>
+
+---
+
+## 🚀 Quick Install (1-Command Terminal or AI Agent)
+
+### Option 1 — Single-Command Terminal Install (Prebuilt Binary + Auto MCP Setup)
+
+Copy and paste into your terminal to download the prebuilt Linux `x86_64` binary (`~692 KB`), verify its SHA-256 checksum, install to `~/.local/bin/flutterff-rs`, and automatically wire the `flutterff` MCP server for your AI coding agents:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aswin402/flutterff-rs/master/install.sh | bash
+```
+
+### Option 2 — Ask Your AI Agent to Install It (Copy-Paste Prompt)
+
+Paste this single line into **Antigravity**, **Claude Code**, **Cursor**, **Windsurf**, or **Codex**:
+
+```text
+Install and configure flutterff-rs (https://github.com/aswin402/flutterff-rs) and wire its MCP server for yourself by running: curl -fsSL https://raw.githubusercontent.com/aswin402/flutterff-rs/master/install.sh | bash
+```
 
 ---
 
@@ -126,18 +147,32 @@ Structured following the **[VoltAgent/awesome-design-md](https://github.com/Volt
 
 ---
 
-## 🛠️ Installation & Local Scripts
+## 🛠️ Installation & Build Options
 
-### Prerequisites
+### 1. Universal 1-Command Installer ([`install.sh`](install.sh))
+
+```bash
+# Install prebuilt binary + auto-configure MCP server for AI agents
+curl -fsSL https://raw.githubusercontent.com/aswin402/flutterff-rs/master/install.sh | bash
+
+# Or force compiling from source (-j 1)
+curl -fsSL https://raw.githubusercontent.com/aswin402/flutterff-rs/master/install.sh | bash -s -- --from-source
+```
+
+### 2. Direct Binary Download ([GitHub Releases](https://github.com/aswin402/flutterff-rs/releases/latest))
+
+```bash
+curl -fsSL https://github.com/aswin402/flutterff-rs/releases/latest/download/flutterff-rs -o ~/.local/bin/flutterff-rs
+chmod +x ~/.local/bin/flutterff-rs
+```
+
+### 3. Build from Source (`-j 1` Configured)
 
 - **Rust**: `rustc 1.99+` (Edition 2024) via [rustup.rs](https://rustup.rs/)
-- **Flutter**: `flutter` CLI available in your `PATH`
 - **GTK3 & WebKit2GTK Development Libraries**:
   - **Ubuntu / Debian**: `sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev`
   - **Arch Linux**: `sudo pacman -S gtk3 webkit2gtk-4.1`
   - **Fedora**: `sudo dnf install gtk3-devel webkit2gtk4.1-devel`
-
-### Build & Install (`-j 1` Configured)
 
 All Cargo operations in this repository are configured in `.cargo/config.toml` to run with **`jobs = 1` (`-j 1`)** for deterministic, low-contention compilation:
 
@@ -149,8 +184,6 @@ chmod +x localinstall.sh
 # Rebuild (-j 1) with backup (~/.local/bin/flutterff-rs.bak) after local edits
 ./localupdate.sh
 ```
-
-*(Note: `localinstall.sh` and `localupdate.sh` are listed in `.gitignore` so machine-specific installer tweaks stay local.)*
 
 ---
 
